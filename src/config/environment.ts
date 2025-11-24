@@ -41,6 +41,7 @@ export const config = {
     
     // Frontend URL
     url: process.env.FRONTEND_URL!,
+    adminUrl: process.env.ADMIN_URL || 'https://admin.themorayobrownshow.com'
 };
 
 // Validate required environment variables

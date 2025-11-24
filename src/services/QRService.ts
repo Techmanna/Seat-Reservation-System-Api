@@ -3,7 +3,7 @@ import { Booking } from '../types/index';
 import QRCode from 'qrcode';
 
 export class QRService {
-  private readonly qrUrl: string = `${config.url}/verify`;
+  private readonly qrUrl: string = `${config.adminUrl}/ticket-verification`;
 
   async generateQRCode(booking: Booking): Promise<string> {
     const qrData = `${this.qrUrl}/${booking.ticketId}`;
