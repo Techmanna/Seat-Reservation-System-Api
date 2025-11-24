@@ -5,7 +5,7 @@ import { UserModel } from '../models/User';
 import { EventModel } from '../models/Event';
 import { BookingModel } from '../models/Booking';
 import { NotificationService } from '../services/NotificationService';
-import { startOfDay, endOfDay, subDays, isBefore } from 'date-fns';
+import { startOfDay, endOfDay, subDays, isBefore, isAfter } from 'date-fns';
 import { validateRequest } from '../middleware/validateRequest';
 import { getAllBookingsSchema, ticketIdParamsSchema } from '../dtos/index.dto';
 import { ApiResponse, BookingStatus, User } from '../types';
@@ -973,19 +973,22 @@ router.patch('/registrations/:id/checkin', async (req, res) => {
     // check the time too if it's in the past
     const eventDate = new Date(registration.eventDate);
     const now = new Date();
+
+    // Prevent check-in before event start
     if (isBefore(now, eventDate)) {
       res.status(400).json({
         success: false,
-        message: 'Cannot check-in before event date'
+        message: 'Cannot check-in before event start'
       });
       return;
     }
 
-    // cannot check-in if the event is in the past
-    if (isBefore(eventDate, now)) {
+    // Prevent check-in if event is over (e.g., more than 1 day after event)
+    const eventEnd = new Date(eventDate.getTime() + 24 * 60 * 60 * 1000); // assuming event lasts 1 day
+    if (isAfter(now, eventEnd)) {
       res.status(400).json({
         success: false,
-        message: 'Cannot check-in before event date'
+        message: 'Event is over, cannot check-in'
       });
       return;
     }

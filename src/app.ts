@@ -70,7 +70,7 @@ app.use(cors({
 }));
  app.disable('x-powered-by');
 
-// app.use('/api/', limiter);
+app.use('/api/', limiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
