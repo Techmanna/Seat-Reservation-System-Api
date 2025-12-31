@@ -1,5 +1,5 @@
 import config from '../config/environment';
-import { User, Booking, BookingRequest, NotificationFilter, NotificationJob } from '../types/index';
+import { User, Booking, NotificationFilter, NotificationJob } from '../types/index';
 import { sendEmail } from '../utils/email';
 import { EmailTemplateBuilder } from '../utils/emailTemplates';
 import { logger } from '../utils/logger';
@@ -14,7 +14,7 @@ export class NotificationService {
     const html = emailTemplates.generateBookingConfirmation(booking);
 
     const mailOptions = {
-      from: process.env.FROM_EMAIL || 'noreply..eventhall.com',
+      from: config.mail.from,
       to: user.email,
       subject: 'Booking Confirmation - Event Hall Reservation',
       html,

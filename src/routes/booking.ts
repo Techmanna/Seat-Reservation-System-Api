@@ -8,6 +8,34 @@ const router = Router();
 const bookingService = new BookingService();
 
 // Step 1: Initiate booking with email verification
+/**
+ * @swagger
+ * /bookings/initiate:
+ *   post:
+ *     summary: Initiate booking with email verification
+ *     tags: [Bookings]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email:
+ *                 type: string
+ *               eventDate:
+ *                 type: string
+ *                 format: date
+ *               seatLabels:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *     responses:
+ *       200:
+ *         description: Booking initiated
+ *       400:
+ *         description: Validation error
+ */
 router.post('/initiate', validateRequest(bookingSchema, 'body'), async (req, res) => {
   try {
     const result = await bookingService.initiateBooking(req.body);
@@ -24,6 +52,29 @@ router.post('/initiate', validateRequest(bookingSchema, 'body'), async (req, res
 });
 
 // Step 2: Verify OTP and complete booking
+/**
+ * @swagger
+ * /bookings/verify:
+ *   post:
+ *     summary: Verify OTP and complete booking
+ *     tags: [Bookings]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email:
+ *                 type: string
+ *               otp:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Booking completed
+ *       400:
+ *         description: Invalid OTP or data
+ */
 router.post('/verify', validateRequest(otpVerificationSchema, 'body'), async (req, res) => {
   try {
     const result = await bookingService.verifyOTPAndCompleteBooking(req.body);
@@ -40,6 +91,27 @@ router.post('/verify', validateRequest(otpVerificationSchema, 'body'), async (re
 });
 
 // Resend OTP
+/**
+ * @swagger
+ * /bookings/resend-otp:
+ *   post:
+ *     summary: Resend OTP to email
+ *     tags: [Bookings]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: OTP resent
+ *       400:
+ *         description: Missing email or error
+ */
 router.post('/resend-otp', async (req, res) => {
   try {
     const { email } = req.body;
@@ -65,6 +137,25 @@ router.post('/resend-otp', async (req, res) => {
 });
 
 // Get available seats for a specific date
+/**
+ * @swagger
+ * /bookings/seats/{date}:
+ *   get:
+ *     summary: Get available seats for a date
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *     responses:
+ *       200:
+ *         description: Available seats returned
+ *       400:
+ *         description: Invalid date or error
+ */
 router.get('/seats/:date', async (req, res) => {
   try {
     const { date } = req.params;
@@ -84,6 +175,29 @@ router.get('/seats/:date', async (req, res) => {
 });
 
 // Cancel/Void booking
+/**
+ * @swagger
+ * /bookings/cancel:
+ *   post:
+ *     summary: Cancel/Void booking
+ *     tags: [Bookings]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               ticketId:
+ *                 type: string
+ *               reservationToken:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Booking cancelled
+ *       400:
+ *         description: Validation error
+ */
 router.post('/cancel', validateRequest(cancelReservationParamsSchema, 'body'), async (req, res) => {
   try {
     const { ticketId, reservationToken } = req.body;

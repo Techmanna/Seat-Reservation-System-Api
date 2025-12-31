@@ -214,14 +214,15 @@ export class EmailTemplateBuilder {
   }
   
   getIcon(type: 'success' | 'warning' | 'error' | 'info') {
-    const icons = {
-      success: `<svg viewBox="0 0 24 24"><path d="M9 16.17L5.53 12.7c-.39-.39-1.02-.39-1.41 0-.39.39-.39 1.02 0 1.41l4.18 4.18c.39.39 1.02.39 1.41 0L20.29 6.71c.39-.39.39-1.02 0-1.41-.39-.39-1.02-.39-1.41 0L9 16.17z"  width="16" height="16"/></svg>`,
-      warning: `<svg viewBox="0 0 24 24"><path d="M12 2L1 21h22L12 2zm0 3.99L19.53 19H4.47L12 5.99zM11 16h2v2h-2zm0-6h2v4h-2z"  width="16" height="16"/></svg>`,
-      error: `<svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"  width="16" height="16"/></svg>`,
-      info: `<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"  width="16" height="16"/></svg>`
-    };
-    // return icons[type] || icons.info;
-    return icons.info;
+    return '';
+    // const icons = {
+    //   success: `<svg viewBox="0 0 24 24"><path d="M9 16.17L5.53 12.7c-.39-.39-1.02-.39-1.41 0-.39.39-.39 1.02 0 1.41l4.18 4.18c.39.39 1.02.39 1.41 0L20.29 6.71c.39-.39.39-1.02 0-1.41-.39-.39-1.02-.39-1.41 0L9 16.17z"  width="16" height="16"/></svg>`,
+    //   warning: `<svg viewBox="0 0 24 24"><path d="M12 2L1 21h22L12 2zm0 3.99L19.53 19H4.47L12 5.99zM11 16h2v2h-2zm0-6h2v4h-2z"  width="16" height="16"/></svg>`,
+    //   error: `<svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"  width="16" height="16"/></svg>`,
+    //   info: `<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"  width="16" height="16"/></svg>`
+    // };
+    // // return icons[type] || icons.info;
+    // return icons.info;
   }
 
   // Base template structure
@@ -266,7 +267,7 @@ export class EmailTemplateBuilder {
            <img src="${this.getLogo()}" alt="Logo" class="logo">
         </div>
   
-        <div class="status-icon success">
+        <div class="status-iconsuccess">
           <div>${this.getIcon('success')}</div>
         </div>
   
@@ -330,13 +331,13 @@ export class EmailTemplateBuilder {
             <li><span class="info-bullet"></span>Please arrive 15 minutes before the session starts</li>
             <li><span class="info-bullet"></span>Bring a valid ID for verification</li>
             <li><span class="info-bullet"></span>Session materials will be provided</li>
-            <li><span class="info-bullet"></span>Contact support@company.com for any queries</li>
+            <li><span class="info-bullet"></span>Contact info@mabstudios.com for any queries</li>
           </ul>
         </div>
   
         <div class="footer">
           <p>Thank you for booking with us! We look forward to seeing you at the event.</p>
-          <p>This email was sent to ${u.email}</p>
+          ${u.email ? `<p>This email was sent to ${u.email}</p>` : ''}
         </div>
       `;
 
@@ -364,7 +365,7 @@ export class EmailTemplateBuilder {
           <img src="${this.getLogo()}" alt="Logo" class="logo">
         </div>
   
-        <div class="status-icon error">
+        <div class="status-iconerror">
           <div>${this.getIcon('error')} </div> 
       </div>
   
@@ -429,7 +430,7 @@ export class EmailTemplateBuilder {
        <img src="${this.getLogo()}" alt="Logo" class="logo">
       </div>
 
-      <div class="status-icon info">
+      <div class="status-iconinfo">
         <div>${this.getIcon('info')}</div> 
      </div>
 
@@ -460,7 +461,7 @@ export class EmailTemplateBuilder {
       <div style="text-align: center; margin: 30px 0; padding: 20px; background: #fef3c7; border-radius: 8px; border-left: 4px solid #f59e0b;">
         <p style="color: #92400e; margin: 0; font-size: 14px;">
           <strong>Having trouble?</strong> If you're unable to use the code above, please contact our support team at 
-          <a href="mailto:support@company.com" style="color: #d97706; text-decoration: none;">support@company.com</a>
+          <a href="mailto:info@mabstudios.com" style="color: #d97706; text-decoration: none;">info@mabstudios.com</a>
         </p>
       </div>
 
@@ -525,7 +526,7 @@ export class EmailTemplateBuilder {
   //         </div>
   //         <ul class="info-list">
   //           <li><span class="info-bullet"></span>Check our FAQ section</li>
-  //           <li><span class="info-bullet"></span>Contact support at support@company.com</li>
+  //           <li><span class="info-bullet"></span>Contact support at info@mabstudios.com</li>
   //           <li><span class="info-bullet"></span>Join our community forum</li>
   //         </ul>
   //       </div>

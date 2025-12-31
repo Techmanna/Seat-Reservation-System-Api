@@ -4,7 +4,14 @@ import { BookingModel } from "../models/Booking";
 import { SystemSettingsModel } from "../models/SystemSettings";
 import { QRService } from "./QRService";
 import { v4 as uuidv4 } from "uuid";
-import { startOfDay, endOfDay, isAfter, isBefore, addMinutes, isWithinInterval } from "date-fns";
+import {
+  startOfDay,
+  endOfDay,
+  isAfter,
+  isBefore,
+  addMinutes,
+  isWithinInterval,
+} from "date-fns";
 import {
   BookingRequest,
   Booking,
@@ -80,25 +87,30 @@ export class BookingService {
       // Perform all the validation checks first (same as original createBooking)
       const settings = await getSystemSettings();
       const now = new Date();
+      const selected = startOfDay(new Date(bookingData.eventDate));
+      const start = startOfDay(settings.reservationOpenDate);
+      const end = endOfDay(settings.reservationCloseDate);
+      console.log({
+        now,
+        reservationOpenDate: settings.reservationOpenDate,
+        reservationCloseDate: settings.reservationCloseDate,
+        selectedDate: bookingData.eventDate,
+      });
 
       // Check if reservations are open
       if (
         settings.reservationOpenDate &&
         settings.reservationCloseDate &&
-        !isWithinInterval(now, {
-          start: settings.reservationOpenDate,
-          end: settings.reservationCloseDate,
-        })
+        !isWithinInterval(selected, { start, end })
       ) {
         return {
           success: false,
-          message: "Reservations are currently closed",
+          message: `Reservations open ${start.toLocaleDateString()} and close ${end.toLocaleDateString()}. Please select a date within this range.`,
           error: "Outside reservation period",
         };
       }
 
       const eventDate = new Date(bookingData.eventDate);
-      console.log({ eventDate });
       // Check if event date is in the future
       if (isBefore(eventDate, startOfDay(now))) {
         return {

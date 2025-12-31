@@ -27,8 +27,8 @@ export const cancelReservationParamsSchema = Joi.object({
 
 export const bookingSchema = Joi.object({
   eventDate: Joi.date().iso().required(),
-  seatNumbers: Joi.array().items(Joi.number().positive()).min(1).max(2).required(),
-  seatLabels: Joi.array().items(Joi.string()).min(1).max(2).required(),
+  seatNumbers: Joi.array().items(Joi.number().positive()).min(1).required(),
+  seatLabels: Joi.array().items(Joi.string()).min(1).required(),
   name: Joi.string().trim().min(2).max(100).required(),
   email: Joi.string().email().required(),
   phone: Joi.string().pattern(/^[0-9+\-\s()]+$/).min(10).max(20).required(),

@@ -14,12 +14,12 @@ export const config = {
 
     // Mail Configuration
     mail: {
-        host: process.env.MAIL_HOST || 'mail.themorayobrownshow.com',
+        host: process.env.MAIL_HOST || 'sandbox.smtp.mailtrap.io',
         port: parseInt(process.env.MAIL_PORT || '465', 10),
-        secure: process.env.MAIL_SECURE === 'true',
-        senderEmail: process.env.MAIL_SENDER_EMAIL || 'hello@themorayobrownshow.com',
-        password: process.env.MAIL_PASSWORD || 'g!)(wE18yu-j',
-        from: process.env.MAIL_FROM || 'The Morayo Brown Show <hello@themorayobrownshow.com>',
+        secure: parseInt(process.env.MAIL_PORT || '465', 10) === 465,
+        senderEmail: process.env.MAIL_SENDER_EMAIL || "be2d917dd5f2a1",
+        password: process.env.MAIL_PASSWORD || "30544cafcdcd0e",
+        from: process.env.MAIL_FROM,
     },
 
     // JWT Configuration

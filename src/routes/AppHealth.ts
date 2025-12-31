@@ -12,15 +12,18 @@ const HealthCheck = mongoose.model('HealthCheck', HealthCheckSchema, 'health_che
 const router = Router();
 
 // GET /health - Get application health status
- /**
-    * @swagger
-    * /user:
-    *   get:
-    *     summary: Retrieve a list of users
-    *     responses:
-    *       200:
-    *         description: A list of users
-    */
+/**
+ * @swagger
+ * /health:
+ *   get:
+ *     summary: Application health check
+ *     description: Returns service status, uptime, memory, and DB connectivity.
+ *     responses:
+ *       200:
+ *         description: Health status retrieved successfully
+ *       500:
+ *         description: Health check failed
+ */
 
 router.get('/health', async (req, res: Response): Promise<void> => {
     try {
