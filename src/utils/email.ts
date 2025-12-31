@@ -3,23 +3,14 @@ import nodemailer from "nodemailer";
 import { logger } from "./logger";
  
 // Looking to send emails in production? Check out our Email API/SMTP product!
-// const transporter = nodemailer.createTransport({
-//   host: config.mail.host,
-//   port: config.mail.port,
-//   secure: config.mail.secure,
-//   auth: {
-//     user: config.mail.senderEmail,
-//     pass: config.mail.password
-//   },
-// });
-// Looking to send emails in production? Check out our Email API/SMTP product!
-var transporter = nodemailer.createTransport({
-  host: "sandbox.smtp.mailtrap.io",
-  port: 2525,
+const transporter = nodemailer.createTransport({
+  host: config.mail.host,
+  port: config.mail.port,
+  secure: config.mail.secure,
   auth: {
-    user: "be2d917dd5f2a1",
-    pass: "30544cafcdcd0e"
-  }
+    user: config.mail.senderEmail,
+    pass: config.mail.password
+  },
 });
 
 export const sendEmail = async ({
