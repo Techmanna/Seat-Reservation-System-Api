@@ -278,15 +278,19 @@ export class EmailTemplateBuilder {
           <h2 class="details-title">Booking Summary</h2>
           <div class="detail-row">
             <span class="detail-label">Session</span>
-            <span class="detail-value">${'The Nigerian Family Space'}</span>
+            <span class="detail-value">${'The Morayo Show'}</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">Date</span>
             <span class="detail-value">${formatDate(eventDate.toString())}</span>
           </div>
           <div class="detail-row">
-            <span class="detail-label">Time</span>
-            <span class="detail-value">${'4:00PM'}</span>
+            <span class="detail-label">Arrival</span>
+            <span class="detail-value">${'9:00AM'}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Live</span>
+            <span class="detail-value">${'11:00AM'}</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">Status</span>
@@ -298,7 +302,7 @@ export class EmailTemplateBuilder {
           </div>
           <div class="detail-row">
             <span class="detail-label">Location</span>
-            <span class="detail-value">${e?.location ?? "Conference Hall A"}</span>
+            <span class="detail-value">${e?.location ?? "MAB Studios"}</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">Booking ID</span>
@@ -383,8 +387,12 @@ export class EmailTemplateBuilder {
             <span class="detail-value">${formatDate(eventDate.toString())}</span>
           </div>
           <div class="detail-row">
-            <span class="detail-label">Time</span>
-            <span class="detail-value">${e.time ?? "4:00PM"}</span>
+            <span class="detail-label">Arrival</span>
+            <span class="detail-value">${e.time ?? "9:00AM"}</span>
+          </div>
+           <div class="detail-row">
+            <span class="detail-label">Live</span>
+            <span class="detail-value">${e.time ?? "11:00AM"}</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">Seat(s)</span>
@@ -594,39 +602,6 @@ export class EmailTemplateBuilder {
 
 // Usage Examples and Export
 const emailTemplates = new EmailTemplateBuilder();
-
-// Example usage in Node.js:
-/*
-const nodemailer = require('nodemailer');
- 
-// Configure your email transporter
-const transporter = nodemailer.createTransporter({
-  // your email config
-});
- 
-// Send booking confirmation
-const bookingData = {
-  logoUrl: 'https://your-domain.com/logo.png',
-  sessionName: 'The Nigerian Family Space',
-  date: 'Thursday, July 18, 2023',
-  time: '4:00 PM - 6:00 PM',
-  seats: ['46C'],
-  location: 'Conference Hall A',
-  bookingId: '#BK-2023-001234',
-  status: 'confirmed',
-  qrCode: 'https://your-qr-code-url.com/qr.png',
-  userEmail: 'user@example.com'
-};
- 
-const htmlContent = emailTemplates.generateBookingConfirmation(bookingData);
- 
-await transporter.sendMail({
-  from: 'noreply@yourcompany.com',
-  to: bookingData.userEmail,
-  subject: 'Booking Confirmation - ' + bookingData.sessionName,
-  html: htmlContent
-});
-*/
 
 module.exports = {
   EmailTemplateBuilder,
