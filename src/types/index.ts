@@ -97,6 +97,7 @@ export interface SystemSettings {
     maxSeatsPerUser: number;
     createdAt?: Date;
     updatedAt?: Date;
+    blockedDates?: Date[];
 }
 
 export interface BookingRequest {

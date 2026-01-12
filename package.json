@@ -17,7 +17,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/app.js",
-    "dev": "nodemon --watch src --ext ts,tsx,json --exec 'ts-node src/app.ts'",
+    "dev": "nodemon --watch src --ext ts,tsx,json --exec \"ts-node -r tsconfig-paths/register src/app.ts\"",
     "test": "jest",
     "test:watch": "jest --watch"
   },
@@ -43,7 +43,8 @@
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
     "uuid": "^10.0.0",
-    "winston": "^3.17.0"
+    "winston": "^3.17.0",
+    "zod": "^4.3.5"
   },
   "devDependencies": {
     "@flydotio/dockerfile": "^0.7.10",

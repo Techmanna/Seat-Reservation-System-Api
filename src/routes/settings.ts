@@ -101,6 +101,7 @@ router.get("", async (req, res) => {
         eventTimes: result.data.eventTimes,
         workingDays: result.data.workingDays,
         maxSeatsPerUser: result.data.maxSeatsPerUser,
+        blockedDates: result.data.blockedDates,
       },
     });
   } catch (error: any) {
