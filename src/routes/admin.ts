@@ -10,7 +10,6 @@ import { ApiResponse, BookingStatus, User } from "../types";
 import { BookingService } from "../services/BookingService";
 import { SettingsService } from "../services/SettingsService";
 import { EventService } from "../services/EventService";
-import { updateSystemSettingsSchema } from "@/validators/systemSettings.schema";
 
 const router = Router();
 const notificationService = new NotificationService();
