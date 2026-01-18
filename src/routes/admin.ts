@@ -102,13 +102,13 @@ router.get("/dashboard/overview", async (req, res) => {
     // Today's registrations (bookings created today)
     const todayRegistrations = await BookingModel.countDocuments({
       createdAt: { $gte: startOfToday, $lte: endOfToday },
-      status: { $ne: "cancelled" },
+      status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
     });
 
     // Yesterday's registrations for comparison
     const yesterdayRegistrations = await BookingModel.countDocuments({
       createdAt: { $gte: startOfYesterday, $lte: endOfYesterday },
-      status: { $ne: "cancelled" },
+      status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
     });
 
     // Calculate trend
@@ -171,7 +171,7 @@ router.get("/dashboard/todays-registrations", async (req, res) => {
     // Get today's bookings with user data
     const todayBookings = await BookingModel.find({
       createdAt: { $gte: startOfToday, $lte: endOfToday },
-      status: { $ne: "cancelled" },
+      status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
     }).populate("user", "name email gender ageRange");
 
     res.json({
@@ -199,7 +199,7 @@ router.get("/dashboard/gender-stats", async (req, res) => {
     // Get user IDs from today's bookings
     const todayBookings = await BookingModel.find({
       createdAt: { $gte: startOfToday, $lte: endOfToday },
-      status: { $ne: "cancelled" },
+      status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
     }).select("user");
 
     const userIds = todayBookings.map((booking) => booking.user);
@@ -248,7 +248,7 @@ router.get("/dashboard/age-stats", async (req, res) => {
     // Get user IDs from today's bookings
     const todayBookings = await BookingModel.find({
       createdAt: { $gte: startOfToday, $lte: endOfToday },
-      status: { $ne: "cancelled" },
+      status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
     }).select("user");
 
     const userIds = todayBookings.map((booking) => booking.user);
@@ -305,7 +305,7 @@ router.get("/dashboard/upcoming-events", async (req, res) => {
       upcomingEvents.map(async (event) => {
         const bookingCount = await BookingModel.countDocuments({
           event: event._id,
-          status: { $ne: "cancelled" },
+          status: { $ne: BookingStatus.Cancelled },
         });
 
         return {
@@ -355,11 +355,11 @@ router.get("/dashboard/all", async (req, res) => {
     ] = await Promise.all([
       BookingModel.countDocuments({
         createdAt: { $gte: startOfToday, $lte: endOfToday },
-        status: { $ne: "cancelled" },
+        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
       }),
       BookingModel.countDocuments({
         createdAt: { $gte: startOfYesterday, $lte: endOfYesterday },
-        status: { $ne: "cancelled" },
+        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
       }),
       BookingModel.countDocuments({ status: "confirmed" }),
       BookingModel.countDocuments({ status: "checked-in" }),
@@ -371,7 +371,7 @@ router.get("/dashboard/all", async (req, res) => {
         .limit(4),
       BookingModel.find({
         createdAt: { $gte: startOfToday, $lte: endOfToday },
-        status: { $ne: "cancelled" },
+        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
       }).populate("user", "name email gender ageRange"),
     ]);
 
@@ -408,18 +408,22 @@ router.get("/dashboard/all", async (req, res) => {
     // Get booking counts for events
     const eventsWithBookings = await Promise.all(
       upcomingEvents.map(async (event) => {
-        const bookingCount = await BookingModel.countDocuments({
+        const bookings = await BookingModel.find({
           event: event._id,
-          status: { $ne: "cancelled" },
-        });
+          status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+        }).select("seatNumbers");
+
+        const bookedSeatCount = new Set(bookings.flatMap((b) => b.seatNumbers))
+          .size;
 
         return {
           id: event._id,
           date: event.date,
           time: event.time,
           total_seats: event.totalSeats,
-          bookedSeats: bookingCount,
-          availableSeats: event.totalSeats - bookingCount,
+          bookedSeats: bookedSeatCount,
+          availableSeats: event.totalSeats - bookedSeatCount,
+          totalBookings: bookings.length,
         };
       })
     );
@@ -521,7 +525,9 @@ router.get("/registrations", async (req, res) => {
     if (status && status !== "all") {
       matchQuery.status = status;
     } else {
-      matchQuery.status = { $ne: "cancelled" };
+      matchQuery.status = {
+        $nin: [BookingStatus.Cancelled, BookingStatus.Voided],
+      };
     }
 
     // Event date filter
@@ -682,7 +688,7 @@ router.get("/registrations", async (req, res) => {
 router.get("/registrations/event-dates", async (req, res) => {
   try {
     const eventDates = await BookingModel.distinct("eventDate", {
-      status: { $ne: "cancelled" },
+      status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
     });
 
     const sortedDates = eventDates
@@ -710,17 +716,27 @@ router.get("/registrations/stats", async (req, res) => {
   try {
     const [totalCount, statusStats, genderStats, ageStats] = await Promise.all([
       // Total registrations (excluding cancelled)
-      BookingModel.countDocuments({ status: { $ne: "cancelled" } }),
+      BookingModel.countDocuments({
+        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+      }),
 
       // Status distribution
       BookingModel.aggregate([
-        { $match: { status: { $ne: "cancelled" } } },
+        {
+          $match: {
+            status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+          },
+        },
         { $group: { _id: "$status", count: { $sum: 1 } } },
       ]),
 
       // Gender distribution
       BookingModel.aggregate([
-        { $match: { status: { $ne: "cancelled" } } },
+        {
+          $match: {
+            status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+          },
+        },
         {
           $lookup: {
             from: "users",
@@ -740,7 +756,11 @@ router.get("/registrations/stats", async (req, res) => {
 
       // Age group distribution
       BookingModel.aggregate([
-        { $match: { status: { $ne: "cancelled" } } },
+        {
+          $match: {
+            status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+          },
+        },
         {
           $lookup: {
             from: "users",
@@ -1206,7 +1226,7 @@ router.put("/settings", async (req, res) => {
       // Convert strings → Date if your service expects Date
       reservationOpenDate: new Date(validatedData.reservationOpenDate),
       reservationCloseDate: new Date(validatedData.reservationCloseDate),
-      blockedDates: validatedData.blockedDates?.map((d:any) => new Date(d)),
+      blockedDates: validatedData.blockedDates?.map((d: any) => new Date(d)),
     });
 
     res.status(200).json(result);

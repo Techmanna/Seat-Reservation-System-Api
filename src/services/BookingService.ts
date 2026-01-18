@@ -141,7 +141,7 @@ export class BookingService {
             $gte: startOfDay(eventDate),
             $lte: endOfDay(eventDate),
           },
-          status: { $ne: BookingStatus.Cancelled },
+          status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
         });
 
         if (existingBooking) {
@@ -231,7 +231,7 @@ export class BookingService {
       // Check if requested seats are available in both confirmed and pending bookings
       const bookedSeats = await BookingModel.find({
         eventId: event._id?.toString(),
-        status: { $ne: BookingStatus.Cancelled },
+        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
       }).select("seatNumbers seatLabels");
 
       const pendingBookings = await PendingBookingModel.find({
@@ -792,12 +792,16 @@ export class BookingService {
           $gte: startOfDay(date),
           $lte: endOfDay(date),
         },
-        status: { $ne: BookingStatus.Cancelled },
+        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
       }).select("seatNumbers seatLabels");
 
-      const bookedSeatNumbers = bookedSeats.flatMap(
-        (booking) => booking.seatNumbers
-      );
+      console.log(bookedSeats.length);
+
+      const bookedSeatNumbers = [
+        ...new Set(bookedSeats.flatMap((b) => b.seatNumbers)),
+      ];
+
+      console.log(bookedSeatNumbers.length);
       const allSeats = SeatUtils.generateAllSeats(
         totalSeats,
         bookedSeatNumbers
