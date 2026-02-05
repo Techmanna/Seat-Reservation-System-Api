@@ -1,15 +1,24 @@
-import config from '../config/environment';
+import config from "../config/environment";
 import nodemailer from "nodemailer";
 import { logger } from "./logger";
- 
+
 // Looking to send emails in production? Check out our Email API/SMTP product!
-const transporter = nodemailer.createTransport({
-  host: config.mail.host,
-  port: config.mail.port,
-  secure: config.mail.secure,
+// const transporter = nodemailer.createTransport({
+//   host: config.mail.host,
+//   port: config.mail.port,
+//   secure: config.mail.secure,
+//   auth: {
+//     user: config.mail.senderEmail,
+//     pass: config.mail.password
+//   },
+// });
+
+var transporter = nodemailer.createTransport({
+  host: "smtp-relay.brevo.com",
+  port: 587,
   auth: {
-    user: config.mail.senderEmail,
-    pass: config.mail.password
+    user: "a1a514001@smtp-brevo.com",
+    pass: "xtvL9pNRDKgVz1QB",
   },
 });
 
