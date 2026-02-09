@@ -91,17 +91,17 @@ router.get("", async (req, res) => {
     res.status(200).json({
       ...result,
       data: {
-        reservationOpenDate: result.data.reservationOpenDate
+        reservationOpenDate: result.data?.reservationOpenDate
           .toISOString()
           .split("T")[0],
-        reservationCloseDate: result.data.reservationCloseDate
+        reservationCloseDate: result.data?.reservationCloseDate
           .toISOString()
           .split("T")[0],
-        defaultTotalSeats: result.data.defaultTotalSeats,
-        eventTimes: result.data.eventTimes,
-        workingDays: result.data.workingDays,
-        maxSeatsPerUser: result.data.maxSeatsPerUser,
-        blockedDates: result.data.blockedDates,
+        defaultTotalSeats: result.data?.defaultTotalSeats,
+        eventTimes: result.data?.eventTimes,
+        workingDays: result.data?.workingDays,
+        maxSeatsPerUser: result.data?.maxSeatsPerUser,
+        blockedDates: result.data?.blockedDates,
       },
     });
   } catch (error: any) {

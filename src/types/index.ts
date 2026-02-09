@@ -92,12 +92,17 @@ export interface SystemSettings {
     reservationOpenDate: Date;
     reservationCloseDate: Date;
     defaultTotalSeats: number;
+    seatCapacityOverrides?: {
+        date: Date;
+        totalSeats: number;
+    }[];
     eventTimes: string[];
     workingDays: number[]; // 1-5 for Monday to Friday
     maxSeatsPerUser: number;
     createdAt?: Date;
     updatedAt?: Date;
     blockedDates?: Date[];
+    minCancellationHours?: number;
 }
 
 export interface BookingRequest {

@@ -190,11 +190,12 @@ export class BookingService {
       });
 
       if (!event) {
+        const totalSeats = SeatUtils.resolveTotalSeats(settings, eventDate)
         event = new EventModel({
           date: eventDate,
           time: settings.eventTimes[0] || "10:00 AM",
-          totalSeats: settings.defaultTotalSeats,
-          availableSeats: settings.defaultTotalSeats,
+          totalSeats,
+          availableSeats: totalSeats,
           isActive: true,
         });
         await event.save();
@@ -784,7 +785,9 @@ export class BookingService {
         },
       });
 
-      const totalSeats = event?.totalSeats || settings.defaultTotalSeats;
+      const totalSeats = SeatUtils.resolveTotalSeats(settings, date);
+
+      // const totalSeats = event?.totalSeats || settings.defaultTotalSeats;
 
       // Get booked seats for this date
       const bookedSeats = await BookingModel.find({

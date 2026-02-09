@@ -1227,6 +1227,14 @@ router.put("/settings", async (req, res) => {
       reservationOpenDate: new Date(validatedData.reservationOpenDate),
       reservationCloseDate: new Date(validatedData.reservationCloseDate),
       blockedDates: validatedData.blockedDates?.map((d: any) => new Date(d)),
+      seatCapacityOverrides: Array.isArray(validatedData.seatCapacityOverrides)
+        ? validatedData.seatCapacityOverrides.map(
+            (o: { date: string; totalSeats: number }) => ({
+              date: new Date(o.date),
+              totalSeats: o.totalSeats,
+            })
+          )
+        : validatedData.seatCapacityOverrides,
     });
 
     res.status(200).json(result);

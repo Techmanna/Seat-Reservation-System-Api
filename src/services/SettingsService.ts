@@ -1,9 +1,9 @@
 import { NotFoundError } from "../middleware/errorHandler";
 import { SystemSettingsModel } from "../models/SystemSettings";
-import { ApiResponse } from "../types";
+import { ApiResponse, SystemSettings } from "../types";
 
 
-export async function getSystemSettings(): Promise<any> {
+export async function getSystemSettings(): Promise<SystemSettings> {
     const settings = await SystemSettingsModel.findOne();
 
     if (!settings) {
@@ -14,7 +14,7 @@ export async function getSystemSettings(): Promise<any> {
 }
 
 export class SettingsService {
-    async getSettings(): Promise<ApiResponse<any>> {
+    async getSettings(): Promise<ApiResponse<SystemSettings>> {
         const settings = await getSystemSettings();
         return {
             success: true,
@@ -23,7 +23,7 @@ export class SettingsService {
         };
     }
 
-    async updateSettings(settings: any): Promise<ApiResponse<any>> {
+    async updateSettings(settings: any): Promise<ApiResponse<SystemSettings>> {
         const updatedSettings = await SystemSettingsModel.findOneAndUpdate({}, settings, { new: true });
 
         if (!updatedSettings) {

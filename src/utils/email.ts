@@ -3,33 +3,34 @@ import nodemailer from "nodemailer";
 import { logger } from "./logger";
 
 // Looking to send emails in production? Check out our Email API/SMTP product!
-// const transporter = nodemailer.createTransport({
-//   host: config.mail.host,
-//   port: config.mail.port,
-//   secure: config.mail.secure,
-//   auth: {
-//     user: config.mail.senderEmail,
-//     pass: config.mail.password
-//   },
-// });
-
-var transporter = nodemailer.createTransport({
-  host: "smtp-relay.brevo.com",
-  port: 587,
+const transporter = nodemailer.createTransport({
+  host: config.mail.host,
+  port: config.mail.port,
+  secure: config.mail.secure,
   auth: {
-    user: "a1a514001@smtp-brevo.com",
-    pass: "xtvL9pNRDKgVz1QB",
+    user: config.mail.senderEmail,
+    pass: config.mail.password
   },
 });
+
+// transporter.verify((error, success) => {
+//   if (error) {
+//     console.error("SMTP Error:", error);
+//   } else {
+//     console.log("SMTP server is ready to send emails");
+//   }
+// });
 
 export const sendEmail = async ({
   to,
   subject,
   html,
+  text,
 }: {
   to: string;
   subject: string;
-  html: string;
+  html?: string;
+  text?: string;
 }) => {
   try {
     await transporter.sendMail({
@@ -37,6 +38,7 @@ export const sendEmail = async ({
       to,
       subject,
       html,
+      text,
     });
     logger.info(`Email sent to ${to}`);
   } catch (err) {

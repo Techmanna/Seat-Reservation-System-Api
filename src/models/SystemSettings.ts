@@ -17,6 +17,19 @@ const systemSettingsSchema = new Schema<SystemSettings>(
       min: 1,
       default: 100,
     },
+    seatCapacityOverrides: [
+      {
+        date: {
+          type: Date,
+          required: true,
+        },
+        totalSeats: {
+          type: Number,
+          required: true,
+          min: 1,
+        },
+      },
+    ],
     eventTimes: [
       {
         type: String,
@@ -42,6 +55,12 @@ const systemSettingsSchema = new Schema<SystemSettings>(
         type: Date,
       },
     ],
+    minCancellationHours: {
+      type: Number,
+      required: true,
+      min: 0,
+      default: 2,
+    },
   },
   {
     timestamps: true,
