@@ -133,10 +133,9 @@ export class CronService {
                                             <div style="background-color: #f8f9fa; border-left: 4px solid #E8593C; padding: 16px; margin: 20px 0; border-radius: 4px;">
                                                 <p style="margin: 6px 0;"><strong>📅 Event Time (your local time):</strong> ${localEventTime}</p>
                                                 <p style="margin: 6px 0;"><strong>🌍 Also in WAT:</strong> ${formatEventTimeForUser(event.date, EVENT_TIMEZONE)}</p>
-                                                <p style="margin: 6px 0; display: none;"><strong>🔗 Join URL:</strong><br/>
-                                                    <a href="${zoomRegistrant.join_url}" style="color: #E8593C; word-break: break-all;">${zoomRegistrant.join_url}</a>
+                                                <p style="margin: 6px 0;"><strong>🔗 Join URL:</strong><br/>
+                                                     <a href="${process.env.FRONTEND_URL}/waiting" style="color: #E8593C; word-break: break-all;">${process.env.FRONTEND_URL}/waiting</a>
                                                 </p>
-                                                ${event.zoomPassword ? `<p style="margin: 6px 0;"><strong>🔐 Passcode:</strong> ${event.zoomPassword}</p>` : ''}
                                             </div>
                                             <p style="color: #7f8c8d; font-size: 13px;">⚠️ Do not share this link. Only one device can connect per registration.</p>
                                         </div>
@@ -237,9 +236,8 @@ export class CronService {
                             <div style="background-color: #f8f9fa; border-left: 4px solid #E8593C; padding: 16px; margin: 20px 0; border-radius: 4px;">
                                 <p style="margin: 6px 0;"><strong>📅 Start Time:</strong> ${localEventTime}</p>
                                 <p style="margin: 6px 0;"><strong>🔗 Join URL:</strong><br/>
-                                    <a href="${zoomRegistrant.join_url}" style="color: #E8593C; word-break: break-all;">${zoomRegistrant.join_url}</a>
+                                    <a href="${process.env.FRONTEND_URL}/waiting" style="color: #E8593C; word-break: break-all;">${process.env.FRONTEND_URL}/waiting</a>
                                 </p>
-                                ${event.zoomPassword ? `<p style="margin: 6px 0;"><strong>🔐 Passcode:</strong> ${event.zoomPassword}</p>` : ''}
                             </div>
                             <p style="color: #7f8c8d; font-size: 13px;">⚠️ Do not share this link. Only one device can connect per registration.</p>
                         </div>

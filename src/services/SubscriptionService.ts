@@ -58,16 +58,20 @@ export class SubscriptionService {
         if (amount && providerSubscriptionId) {
             try {
                 const { TransactionModel } = require('../models/Transaction');
-                await TransactionModel.create({
-                    userId: subscription.userId,
-                    email: subscription.email,
-                    amount,
-                    currency: currency || 'NGN',
-                    provider: provider as any,
-                    providerTransactionId: providerSubscriptionId,
-                    status: 'successful',
-                    tier
-                });
+                await TransactionModel.findOneAndUpdate(
+                    { providerTransactionId: providerSubscriptionId },
+                    {
+                        userId: subscription.userId,
+                        email: subscription.email,
+                        amount,
+                        currency: currency || 'NGN',
+                        provider: provider as any,
+                        providerTransactionId: providerSubscriptionId,
+                        status: 'successful',
+                        tier
+                    },
+                    { upsert: true, new: true }
+                );
             } catch (txError) {
                 console.error("[SubscriptionService] Failed to record transaction:", txError);
             }
