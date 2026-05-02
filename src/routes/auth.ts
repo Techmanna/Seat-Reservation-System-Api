@@ -2,6 +2,8 @@ import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import { AdminModel } from '../models/Admin';
 import { AuthService } from '../services/AuthService';
+import { LoginAuditModel } from '../models/LoginAudit';
+import { authenticateUser } from '../middleware/auth';
 import { BookingService } from '../services/BookingService';
 import { validateRequest } from '../middleware/validateRequest';
 import { UserModel } from '../models/User';
@@ -405,6 +407,16 @@ router.post('/user/login', async (req, res) => {
             { expiresIn: '30d' }
         );
 
+        // Audit Success
+        await LoginAuditModel.create({
+            userId: user._id,
+            email: user.email,
+            status: 'success',
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'],
+            authProvider: 'local'
+        });
+
         res.status(200).json({
             success: true,
             message: 'Login successful',
@@ -416,6 +428,17 @@ router.post('/user/login', async (req, res) => {
             }
         });
     } catch (error: any) {
+        // Audit Failure
+        if (req.body.email) {
+            await LoginAuditModel.create({
+                email: req.body.email,
+                status: 'failed',
+                failureReason: error.message,
+                ipAddress: req.ip,
+                userAgent: req.headers['user-agent'],
+                authProvider: 'local'
+            });
+        }
         res.status(500).json({ success: false, message: error.message });
     }
 });
@@ -473,6 +496,16 @@ router.post('/user/google-login', async (req, res) => {
             { expiresIn: '30d' }
         );
 
+        // Audit Success
+        await LoginAuditModel.create({
+            userId: user._id,
+            email: user.email,
+            status: 'success',
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'],
+            authProvider: 'google'
+        });
+
         res.status(200).json({
             success: true,
             message: 'Google login successful',
@@ -485,6 +518,15 @@ router.post('/user/google-login', async (req, res) => {
         });
     } catch (error: any) {
         console.error("Google Login Error:", error);
+        // Audit Failure
+        await LoginAuditModel.create({
+            email: 'google-auth-failure',
+            status: 'failed',
+            failureReason: error.message,
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'],
+            authProvider: 'google'
+        });
         res.status(500).json({ success: false, message: 'Google authentication failed' });
     }
 });
@@ -502,6 +544,14 @@ router.post('/user/forgot-password', async (req, res) => {
         if (!user) {
              res.status(404).json({ success: false, message: 'No user found with that email address' });
              return;
+        }
+
+        if (user.authProvider === 'google') {
+            res.status(400).json({ 
+                success: false, 
+                message: 'This account uses Google authentication. Please sign in with Google.' 
+            });
+            return;
         }
 
         const resetToken = crypto.randomBytes(32).toString('hex');
@@ -569,6 +619,83 @@ router.post('/user/reset-password', async (req, res) => {
         res.status(200).json({
             success: true,
             message: 'Password updated successfully. You can now log in.'
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// User Change Password (Authenticated)
+router.post('/user/change-password', authenticateUser, async (req: AuthRequest, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        const userId = req.user!.id;
+
+        if (!currentPassword || !newPassword) {
+            res.status(400).json({ success: false, message: 'Current and new passwords are required' });
+            return;
+        }
+
+        const user = await UserModel.findById(userId);
+        if (!user || user.authProvider === 'google') {
+            res.status(400).json({ success: false, message: 'Password change not supported for this account type' });
+            return;
+        }
+
+        const isMatch = await bcrypt.compare(currentPassword, user.password!);
+        if (!isMatch) {
+            res.status(400).json({ success: false, message: 'Incorrect current password' });
+            return;
+        }
+
+        user.password = await bcrypt.hash(newPassword, 10);
+        await user.save();
+
+        res.status(200).json({ success: true, message: 'Password changed successfully' });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// Get User Profile
+router.get('/user/profile', authenticateUser, async (req: AuthRequest, res) => {
+    try {
+        const user = await UserModel.findById(req.user!.id).select('-password -verificationToken -resetPasswordToken');
+        res.status(200).json({ success: true, data: user });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// Update User Profile
+router.patch('/user/profile', authenticateUser, async (req: AuthRequest, res) => {
+    try {
+        const { name, phone, gender, ageRange } = req.body;
+        const user = await UserModel.findById(req.user!.id);
+
+        if (!user) {
+            res.status(404).json({ success: false, message: 'User not found' });
+            return;
+        }
+
+        if (name) user.name = name;
+        if (phone) user.phone = phone;
+        if (gender) user.gender = gender;
+        if (ageRange) user.ageRange = ageRange;
+
+        await user.save();
+
+        res.status(200).json({ 
+            success: true, 
+            message: 'Profile updated successfully',
+            data: {
+                id: user._id,
+                name: user.name,
+                email: user.email,
+                phone: user.phone,
+                gender: user.gender,
+                ageRange: user.ageRange
+            }
         });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
