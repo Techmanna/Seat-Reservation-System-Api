@@ -6,6 +6,7 @@ export class EventDTO {
             id: event?._id?.toString(),
             date: event?.date,
             time: event?.time,
+            endTime: event?.endTime,
             totalSeats: event?.totalSeats,
             availableSeats: event?.availableSeats,
             isActive: event?.isActive,
