@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { logger } from '../utils/logger';
 
 dotenv.config();
 
@@ -15,7 +16,7 @@ export class ZoomService {
 
     private static async getAccessToken(): Promise<string> {
         if (!this.accountId || !this.clientId || !this.clientSecret) {
-            console.warn("[ZoomService] Missing credentials. Returning mock token.");
+            logger.warn("[ZoomService] Missing credentials. Returning mock token.");
             return "mock_zoom_token";
         }
 
@@ -35,7 +36,7 @@ export class ZoomService {
             }
             return data.access_token;
         } catch (error: any) {
-            console.error("[ZoomService] Token acquisition failed:", error.message);
+            logger.error("[ZoomService] Token acquisition failed:", error.message);
             throw error;
         }
     }
@@ -47,7 +48,7 @@ export class ZoomService {
         lastName: string
     ): Promise<ZoomRegistrantResponse> {
         if (!this.clientId) {
-            console.log(`[ZoomService] Mock registration for ${email} to webinar ${webinarId}`);
+            logger.info(`[ZoomService] Mock registration for ${email} to webinar ${webinarId}`);
             return {
                 id: 'mock_reg_id',
                 join_url: `https://zoom.us/j/mock_${webinarId}?token=${Date.now()}`,
@@ -83,7 +84,7 @@ export class ZoomService {
 
     public static async removeSubscriber(webinarId: string, registrantId: string): Promise<boolean> {
         if (!this.clientId) {
-            console.log(`[ZoomService] Mock removal of registrant ${registrantId}`);
+            logger.info(`[ZoomService] Mock removal of registrant ${registrantId}`);
             return true;
         }
 
@@ -105,7 +106,7 @@ export class ZoomService {
     public static async createMeeting(topic: string, startTime: Date, timezone?: string): Promise<{ id: string, join_url: string, password?: string }> {
         if (!this.clientId) {
             const mockId = `mock_mtg_${Math.floor(Math.random() * 1000000)}`;
-            console.log(`[ZoomService] Mock meeting creation for ${topic}`);
+            logger.info(`[ZoomService] Mock meeting creation for ${topic}`);
             return {
                 id: mockId,
                 join_url: `https://zoom.us/j/${mockId}`,

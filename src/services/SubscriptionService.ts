@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import { CronService } from './CronService';
 import { EventModel } from '../models/Event';
 import { DateTime } from 'luxon';
+import { logger } from '../utils/logger';
 
 export class SubscriptionService {
     public static async activateSubscription(
@@ -77,7 +78,7 @@ export class SubscriptionService {
                     { upsert: true, new: true }
                 );
             } catch (txError) {
-                console.error("[SubscriptionService] Failed to record transaction:", txError);
+                logger.error("[SubscriptionService] Failed to record transaction:", txError);
             }
         }
 
@@ -109,7 +110,7 @@ export class SubscriptionService {
                     { upsert: true, new: true }
                 );
             } catch (zoomError) {
-                console.error("[SubscriptionService] Zoom registration failed for new subscriber:", zoomError);
+                logger.error("[SubscriptionService] Zoom registration failed for new subscriber:", zoomError);
             }
         }
 
@@ -119,7 +120,7 @@ export class SubscriptionService {
         try {
             await CronService.addSubscriberToUpcomingEvents(email);
         } catch (e) {
-            console.error("[SubscriptionService] Cron immediate hook failed:", e);
+            logger.error("[SubscriptionService] Cron immediate hook failed:", e);
         }
 
         return subscription;
@@ -137,7 +138,7 @@ export class SubscriptionService {
             try {
                 await ZoomService.removeSubscriber(webinarId, subscription.zoomRegistrantId);
             } catch (zoomError) {
-                console.error("[SubscriptionService] Zoom removal failed upon cancellation:", zoomError);
+                logger.error("[SubscriptionService] Zoom removal failed upon cancellation:", zoomError);
             }
         }
 
@@ -156,7 +157,7 @@ export class SubscriptionService {
                 await ZoomService.removeMeetingAttendee(event.zoomMeetingId, subscription.zoomRegistrantId);
             }
         } catch (meetingError) {
-            console.error("[SubscriptionService] Standard meeting attendee removal failed:", meetingError);
+            logger.error("[SubscriptionService] Standard meeting attendee removal failed:", meetingError);
         }
 
         subscription.zoomJoinUrl = undefined;

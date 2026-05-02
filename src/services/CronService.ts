@@ -9,6 +9,7 @@ import { getSystemSettings } from './SettingsService';
 import { DateTime } from 'luxon';
 import { parseUserName } from '../utils/user';
 import { SubscriptionService } from './SubscriptionService';
+import { logger } from '../utils/logger';
 
 export class CronService {
     public static async createDailyEventsAndZoom(): Promise<void> {
@@ -63,7 +64,7 @@ export class CronService {
                         event.zoomPassword = zoomData.password;
                         await event.save();
                     } catch (zoomError) {
-                        console.error(`[CronService] Zoom creation failed for ${eventUtcDate}:`, zoomError);
+                        logger.error(`[CronService] Zoom creation failed for ${eventUtcDate}:`, zoomError);
                         continue;
                     }
                 }
@@ -109,46 +110,23 @@ export class CronService {
                                     { upsert: true, new: true }
                                 );
                             } catch (historyError) {
-                                console.error("[CronService] Failed to record registration history:", historyError);
+                                logger.error("[CronService] Failed to record registration history:", historyError);
                             }
 
                             // Build localised time string for this subscriber
                             const userTz = sub.timezone || EVENT_TIMEZONE;
                             const localEventTime = formatEventTimeForUser(event.date, userTz);
 
-                            await sendEmail({
-                                to: sub.email,
-                                subject: `Your Zoom Access — The Morayo Show · ${localEventTime}`,
-                                html: `
-                                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eaeaea; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-                                        <div style="background: linear-gradient(135deg, #E8593C 0%, #764ba2 100%); padding: 24px; text-align: center; color: white;">
-                                            <h2 style="margin: 0; font-size: 24px;">The Morayo Show — Live Access</h2>
-                                        </div>
-                                        <div style="padding: 24px; background-color: #ffffff;">
-                                            <p style="font-size: 16px;">Hello ${firstName},</p>
-                                            <p>You are registered for today's live session. Here are your details:</p>
-                                            <div style="background-color: #f8f9fa; border-left: 4px solid #E8593C; padding: 16px; margin: 20px 0; border-radius: 4px;">
-                                                <p style="margin: 6px 0;"><strong>📅 Event Time (your local time):</strong> ${localEventTime}</p>
-                                                <p style="margin: 6px 0;"><strong>🌍 Also in WAT:</strong> ${formatEventTimeForUser(event.date, EVENT_TIMEZONE)}</p>
-                                                <p style="margin: 6px 0;"><strong>🔗 Join URL:</strong><br/>
-                                                     <a href="${process.env.FRONTEND_URL}/waiting" style="color: #E8593C; word-break: break-all;">${process.env.FRONTEND_URL}/waiting</a>
-                                                </p>
-                                            </div>
-                                            <p style="color: #7f8c8d; font-size: 13px;">
-                                            If you can no longer make it, you can cancel your subscription on your dashboard.
-                                            </p>
-                                        </div>
-                                    </div>
-                                `
-                            });
+                            // Send Zoom Access Email
+                            await this.sendZoomAccessEmail(firstName, sub.email, localEventTime, event.date);
                         } catch (regError) {
-                            console.error(`[CronService] Attendee mapping failed for ${sub.email}:`, regError);
+                            logger.error(`[CronService] Attendee mapping failed for ${sub.email}:`, regError);
                         }
                     }
                 }
             }
         } catch (error) {
-            console.error('[CronService] Background sync execution failed:', error);
+            logger.error('[CronService] Background sync execution failed:', error);
         }
     }
 
@@ -218,12 +196,103 @@ export class CronService {
                     { upsert: true, new: true }
                 );
             } catch (historyError) {
-                console.error("[CronService] Failed to record registration history:", historyError);
+                logger.error("[CronService] Failed to record registration history:", historyError);
             }
 
             const userTz = subscription.timezone || EVENT_TIMEZONE;
             const localEventTime = formatEventTimeForUser(event.date, userTz);
 
+            // Send Welcome Email
+            await this.sendWelcomeEmail(email, localEventTime);
+        } catch (error) {
+            logger.error(`[CronService] Immediate subscriber addition failed for ${email}:`, error);
+        }
+    }
+
+    public static async checkAndCleanupExpiredSubscriptions(): Promise<void> {
+        try {
+            const now = new Date();
+            // Find active subscriptions that have passed their period end
+            const expiredSubscriptions = await SubscriptionModel.find({
+                status: SubscriptionStatus.ACTIVE,
+                currentPeriodEnd: { $lt: now }
+            });
+
+            if (expiredSubscriptions.length === 0) return;
+
+            logger.info(`[CronService] Found ${expiredSubscriptions.length} expired subscriptions. Cleaning up...`);
+
+            for (const sub of expiredSubscriptions) {
+                try {
+                    // We use the subscription service to handle the complex cancellation logic 
+                    // (removing from Zoom, clearing join URLs, etc.)
+                    // If providerSubscriptionId is missing (e.g. for some manual subs), 
+                    // we'll need to handle it.
+                    if (sub.providerSubscriptionId) {
+                        await SubscriptionService.cancelSubscription(sub.providerSubscriptionId);
+                    } else {
+                        // Manual cleanup for subscriptions without provider IDs
+                        sub.status = SubscriptionStatus.CANCELLED;
+                        sub.zoomJoinUrl = undefined;
+                        sub.zoomRegistrantId = undefined;
+                        await sub.save();
+                    }
+                    logger.info(`[CronService] Deactivated expired subscription for: ${sub.email}`);
+                } catch (subError) {
+                    logger.error(`[CronService] Failed to cleanup sub for ${sub.email}:`, subError);
+                }
+            }
+        } catch (error) {
+            logger.error('[CronService] Expired subscription cleanup failed:', error);
+        }
+    }
+
+    public static startBackgroundJobs(): void {
+        // Run immediately on startup
+        this.createDailyEventsAndZoom();
+        this.checkAndCleanupExpiredSubscriptions();
+
+        // Then re-run every 12 hours
+        setInterval(() => {
+            this.createDailyEventsAndZoom();
+            this.checkAndCleanupExpiredSubscriptions();
+        }, 12 * 60 * 60 * 1000);
+    }
+
+    private static async sendZoomAccessEmail(firstName: string, email: string, localEventTime: string, date: Date,): Promise<void> {
+        try {
+            await sendEmail({
+                to: email,
+                subject: `Your Zoom Access — The Morayo Show · ${localEventTime}`,
+                html: `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eaeaea; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                        <div style="background: linear-gradient(135deg, #E8593C 0%, #764ba2 100%); padding: 24px; text-align: center; color: white;">
+                            <h2 style="margin: 0; font-size: 24px;">The Morayo Show — Live Access</h2>
+                        </div>
+                        <div style="padding: 24px; background-color: #ffffff;">
+                            <p style="font-size: 16px;">Hello ${firstName},</p>
+                            <p>You are registered for today's live session. Here are your details:</p>
+                            <div style="background-color: #f8f9fa; border-left: 4px solid #E8593C; padding: 16px; margin: 20px 0; border-radius: 4px;">
+                                <p style="margin: 6px 0;"><strong>📅 Event Time (your local time):</strong> ${localEventTime}</p>
+                                <p style="margin: 6px 0;"><strong>🌍 Also in WAT:</strong> ${formatEventTimeForUser(date, EVENT_TIMEZONE)}</p>
+                                <p style="margin: 6px 0;"><strong>🔗 Join URL:</strong><br/>
+                                        <a href="${process.env.FRONTEND_URL}/waiting" style="color: #E8593C; word-break: break-all;">${process.env.FRONTEND_URL}/waiting</a>
+                                </p>
+                            </div>
+                            <p style="color: #7f8c8d; font-size: 13px;">
+                            If you can no longer make it, you can cancel your subscription on your dashboard.
+                            </p>
+                        </div>
+                    </div>
+                `
+            });
+        } catch (error) {
+            logger.error(`[CronService] Failed to send email to ${email}:`, error);
+        }
+    }
+
+    private static async sendWelcomeEmail(email: string, localEventTime: string): Promise<void> {
+        try {
             await sendEmail({
                 to: email,
                 subject: `Welcome! Your Zoom access for The Morayo Show — ${localEventTime}`,
@@ -248,57 +317,7 @@ export class CronService {
                 `
             });
         } catch (error) {
-            console.error(`[CronService] Immediate subscriber addition failed for ${email}:`, error);
+            logger.error(`[CronService] Failed to send welcome email to ${email}:`, error);
         }
-    }
-
-    public static async checkAndCleanupExpiredSubscriptions(): Promise<void> {
-        try {
-            const now = new Date();
-            // Find active subscriptions that have passed their period end
-            const expiredSubscriptions = await SubscriptionModel.find({
-                status: SubscriptionStatus.ACTIVE,
-                currentPeriodEnd: { $lt: now }
-            });
-
-            if (expiredSubscriptions.length === 0) return;
-
-            console.log(`[CronService] Found ${expiredSubscriptions.length} expired subscriptions. Cleaning up...`);
-
-            for (const sub of expiredSubscriptions) {
-                try {
-                    // We use the subscription service to handle the complex cancellation logic 
-                    // (removing from Zoom, clearing join URLs, etc.)
-                    // If providerSubscriptionId is missing (e.g. for some manual subs), 
-                    // we'll need to handle it.
-                    if (sub.providerSubscriptionId) {
-                        await SubscriptionService.cancelSubscription(sub.providerSubscriptionId);
-                    } else {
-                        // Manual cleanup for subscriptions without provider IDs
-                        sub.status = SubscriptionStatus.CANCELLED;
-                        sub.zoomJoinUrl = undefined;
-                        sub.zoomRegistrantId = undefined;
-                        await sub.save();
-                    }
-                    console.log(`[CronService] Deactivated expired subscription for: ${sub.email}`);
-                } catch (subError) {
-                    console.error(`[CronService] Failed to cleanup sub for ${sub.email}:`, subError);
-                }
-            }
-        } catch (error) {
-            console.error('[CronService] Expired subscription cleanup failed:', error);
-        }
-    }
-
-    public static startBackgroundJobs(): void {
-        // Run immediately on startup
-        this.createDailyEventsAndZoom();
-        this.checkAndCleanupExpiredSubscriptions();
-
-        // Then re-run every 12 hours
-        setInterval(() => {
-            this.createDailyEventsAndZoom();
-            this.checkAndCleanupExpiredSubscriptions();
-        }, 12 * 60 * 60 * 1000);
     }
 }

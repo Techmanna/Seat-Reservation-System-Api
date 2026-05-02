@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { logger } from '../utils/logger';
 
 dotenv.config();
 
@@ -23,7 +24,7 @@ export class PaymentService {
             }
             return data.data;
         } catch (error: any) {
-            console.error("[PaymentService] Paystack error:", error.message);
+            logger.error("[PaymentService] Paystack error:", error.message);
             throw error;
         }
     }
@@ -44,7 +45,7 @@ export class PaymentService {
             }
             return data;
         } catch (error: any) {
-            console.error("[PaymentService] Stripe error:", error.message);
+            logger.error("[PaymentService] Stripe error:", error.message);
             throw error;
         }
     }
@@ -69,7 +70,7 @@ export class PaymentService {
             }
             return data.data;
         } catch (error: any) {
-            console.error("[PaymentService] Flutterwave error:", error.message);
+            logger.error("[PaymentService] Flutterwave error:", error.message);
             throw error;
         }
     }
@@ -101,7 +102,7 @@ export class PaymentService {
             }
             return data.data; // contains the 'link' property for redirection
         } catch (error: any) {
-            console.error("[PaymentService] Flutterwave Init error:", error.message);
+            logger.error("[PaymentService] Flutterwave Init error:", error.message);
             throw error;
         }
     }
