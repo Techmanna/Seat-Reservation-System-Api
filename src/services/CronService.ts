@@ -3,14 +3,16 @@ import { SubscriptionModel } from '../models/Subscription';
 import { SubscriptionStatus } from '../types/subscription.type';
 import { ZoomService } from './ZoomService';
 import { sendEmail } from '../utils/email';
-import { buildEventUtcDate, EVENT_HOUR_WAT, EVENT_MINUTE_WAT, EVENT_TIMEZONE, formatEventTimeForUser, getEventEndTime, getEventStartTime, getLagosEndOfDay, getLagosStartOfDay } from '../utils/formatDate';
+import { buildEventUtcDate, EVENT_TIMEZONE, formatEventTimeForUser, getEventEndTime, getEventStartTime, getLagosEndOfDay, getLagosStartOfDay } from '../utils/formatDate';
 import { SeatUtils } from '../utils/seat';
 import { getSystemSettings } from './SettingsService';
-import { SubscriptionService } from './SubscriptionService';
 import { DateTime } from 'luxon';
+import { parseUserName } from '../utils/user';
+import { SubscriptionService } from './SubscriptionService';
 
 export class CronService {
     public static async createDailyEventsAndZoom(): Promise<void> {
+        if (process.env.NODE_ENV === 'development') return;
         try {
             // Look ahead 2 days: ensure events exist for today, tomorrow, and the day after
             for (let i = 0; i <= 2; i++) {
@@ -78,10 +80,7 @@ export class CronService {
                         if (sub.lastZoomMeetingId === event.zoomMeetingId) continue;
 
                         try {
-                            const name = (sub as any).user?.name || 'Subscriber';
-                            const nameParts = name.split(' ');
-                            const firstName = nameParts[0] || 'Subscriber';
-                            const lastName = nameParts.slice(1).join(' ') || 'Member';
+                            const { firstName, lastName } = parseUserName((sub as any).user?.name);
 
                             const zoomRegistrant = await ZoomService.registerMeetingAttendee(
                                 event.zoomMeetingId!,
@@ -126,7 +125,7 @@ export class CronService {
                                             <h2 style="margin: 0; font-size: 24px;">The Morayo Show — Live Access</h2>
                                         </div>
                                         <div style="padding: 24px; background-color: #ffffff;">
-                                            <p style="font-size: 16px;">Hello Subscriber,</p>
+                                            <p style="font-size: 16px;">Hello ${firstName},</p>
                                             <p>You are registered for today's live session. Here are your details:</p>
                                             <div style="background-color: #f8f9fa; border-left: 4px solid #E8593C; padding: 16px; margin: 20px 0; border-radius: 4px;">
                                                 <p style="margin: 6px 0;"><strong>📅 Event Time (your local time):</strong> ${localEventTime}</p>
@@ -135,7 +134,9 @@ export class CronService {
                                                      <a href="${process.env.FRONTEND_URL}/waiting" style="color: #E8593C; word-break: break-all;">${process.env.FRONTEND_URL}/waiting</a>
                                                 </p>
                                             </div>
-                                            <p style="color: #7f8c8d; font-size: 13px;">⚠️ Do not share this link. Only one device can connect per registration.</p>
+                                            <p style="color: #7f8c8d; font-size: 13px;">
+                                            If you can no longer make it, you can cancel your subscription on your dashboard.
+                                            </p>
                                         </div>
                                     </div>
                                 `
@@ -153,7 +154,7 @@ export class CronService {
 
     public static async addSubscriberToUpcomingEvents(email: string): Promise<void> {
         try {
-            const subscription = await SubscriptionModel.findOne({ email, status: SubscriptionStatus.ACTIVE });
+            const subscription = await SubscriptionModel.findOne({ email, status: SubscriptionStatus.ACTIVE }).populate('user', 'name');;
             if (!subscription) return;
 
             const today = DateTime.now().setZone(EVENT_TIMEZONE).toJSDate();
@@ -188,11 +189,13 @@ export class CronService {
                 await event.save();
             }
 
+            const { firstName, lastName } = parseUserName((subscription as any).user?.name);
+
             const zoomRegistrant = await ZoomService.registerMeetingAttendee(
                 event.zoomMeetingId!,
                 email,
-                'Subscriber',
-                'Member'
+                firstName,
+                lastName
             );
 
             subscription.zoomJoinUrl = zoomRegistrant.join_url;
@@ -237,7 +240,9 @@ export class CronService {
                                     <a href="${process.env.FRONTEND_URL}/waiting" style="color: #E8593C; word-break: break-all;">${process.env.FRONTEND_URL}/waiting</a>
                                 </p>
                             </div>
-                            <p style="color: #7f8c8d; font-size: 13px;">⚠️ Do not share this link. Only one device can connect per registration.</p>
+                            <p style="color: #7f8c8d; font-size: 13px;">
+                                If you can no longer make it, you can cancel your subscription on your dashboard.
+                            </p>
                         </div>
                     </div>
                 `
