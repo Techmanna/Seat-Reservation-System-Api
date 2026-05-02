@@ -8,8 +8,12 @@ import { SeatUtils } from '../utils/seat';
 import { getSystemSettings } from './SettingsService';
 import { DateTime } from 'luxon';
 import { parseUserName } from '../utils/user';
-import { SubscriptionService } from './SubscriptionService';
+import { NotificationService } from './NotificationService';
+import { NotificationType } from '../models/Notification';
 import { logger } from '../utils/logger';
+import { SubscriptionService } from './SubscriptionService';
+
+const notificationService = new NotificationService();
 
 export class CronService {
     public static async createDailyEventsAndZoom(): Promise<void> {
@@ -63,6 +67,19 @@ export class CronService {
                         event.zoomMeetingUrl = zoomData.join_url;
                         event.zoomPassword = zoomData.password;
                         await event.save();
+
+                        // Notify all active subscribers about the new event
+                        // We do this for the next day's event if created
+                        const activeSubs = await SubscriptionModel.find({ status: SubscriptionStatus.ACTIVE });
+                        for (const sub of activeSubs) {
+                            notificationService.notify(
+                                sub.userId.toString(),
+                                NotificationType.EVENT,
+                                'New Event Scheduled',
+                                `A new event "${event.title || 'The Morayo Show'}" has been scheduled for ${eventUtcDate.toDateString()}.`,
+                                { eventId: event._id }
+                            );
+                        }
                     } catch (zoomError) {
                         logger.error(`[CronService] Zoom creation failed for ${eventUtcDate}:`, zoomError);
                         continue;
@@ -209,6 +226,30 @@ export class CronService {
         }
     }
 
+    public static async sendExpirationReminders(): Promise<void> {
+        try {
+            const threeDaysFromNow = DateTime.now().plus({ days: 3 }).toJSDate();
+            const fourDaysFromNow = DateTime.now().plus({ days: 4 }).toJSDate();
+
+            const expiringSubscriptions = await SubscriptionModel.find({
+                status: SubscriptionStatus.ACTIVE,
+                currentPeriodEnd: { $gte: threeDaysFromNow, $lt: fourDaysFromNow }
+            });
+
+            for (const sub of expiringSubscriptions) {
+                await notificationService.notify(
+                    sub.userId.toString(),
+                    NotificationType.REMINDER,
+                    'Subscription Expiring Soon',
+                    `Your subscription will expire on ${sub.currentPeriodEnd.toLocaleDateString()}. Renew now to avoid losing access!`,
+                    { expiry: sub.currentPeriodEnd }
+                );
+            }
+        } catch (error) {
+            logger.error('[CronService] Expiration reminders failed:', error);
+        }
+    }
+
     public static async checkAndCleanupExpiredSubscriptions(): Promise<void> {
         try {
             const now = new Date();
@@ -256,6 +297,7 @@ export class CronService {
         setInterval(() => {
             this.createDailyEventsAndZoom();
             this.checkAndCleanupExpiredSubscriptions();
+            this.sendExpirationReminders();
         }, 12 * 60 * 60 * 1000);
     }
 

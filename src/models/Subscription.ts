@@ -33,6 +33,10 @@ const subscriptionSchema = new Schema<ISubscription>({
         type: String,
         default: null
     },
+    providerSubscriptionToken: {
+        type: String,
+        default: null
+    },
     providerCustomerId: {
         type: String,
         default: null

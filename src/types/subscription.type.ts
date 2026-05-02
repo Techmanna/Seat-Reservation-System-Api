@@ -31,6 +31,7 @@ export interface ISubscription {
     status: SubscriptionStatus;
     provider: PaymentProvider;
     providerSubscriptionId?: string;
+    providerSubscriptionToken?: string;
     providerCustomerId?: string;
     currentPeriodEnd: Date;
     zoomJoinUrl?: string;

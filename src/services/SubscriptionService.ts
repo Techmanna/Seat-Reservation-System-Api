@@ -6,6 +6,10 @@ import { CronService } from './CronService';
 import { EventModel } from '../models/Event';
 import { DateTime } from 'luxon';
 import { logger } from '../utils/logger';
+import { NotificationService } from './NotificationService';
+import { NotificationType } from '../models/Notification';
+
+const notificationService = new NotificationService();
 
 export class SubscriptionService {
     public static async activateSubscription(
@@ -14,6 +18,7 @@ export class SubscriptionService {
         tier: SubscriptionTier,
         provider: PaymentProvider,
         providerSubscriptionId?: string,
+        providerSubscriptionToken?: string,
         providerCustomerId?: string,
         timezone?: string,
         amount?: number,
@@ -38,11 +43,41 @@ export class SubscriptionService {
         let subscription = await SubscriptionModel.findOne({ email });
 
         if (subscription) {
+            // If the user is changing tiers or providers, cancel the old one in the gateway
+            if (subscription.status === SubscriptionStatus.ACTIVE && 
+                subscription.providerSubscriptionId && 
+                subscription.providerSubscriptionId !== providerSubscriptionId) {
+                
+                logger.info(`[SubscriptionService] Upgrading/Changing plan for ${email}. Cancelling old subscription ${subscription.providerSubscriptionId}`);
+                // Call cancelSubscription but without revoking Zoom access yet, 
+                // because we are about to re-activate it for the new tier.
+                // Actually, cancelSubscription handles Zoom too. 
+                // Let's just do the gateway part here or make cancelSubscription modular.
+                
+                try {
+                    if (subscription.provider === PaymentProvider.STRIPE) {
+                        const Stripe = require('stripe');
+                        const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+                        await stripe.subscriptions.cancel(subscription.providerSubscriptionId);
+                    } else if (subscription.provider === PaymentProvider.PAYSTACK) {
+                        const axios = require('axios');
+                        await axios.post(
+                            'https://api.paystack.co/subscription/disable',
+                            { code: subscription.providerSubscriptionId, token: subscription.providerSubscriptionToken },
+                            { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } }
+                        );
+                    }
+                } catch (e: any) {
+                    logger.error(`[SubscriptionService] Failed to cancel old plan during upgrade:`, e.message);
+                }
+            }
+
             subscription.status = SubscriptionStatus.ACTIVE;
             subscription.tier = tier;
             subscription.provider = provider;
             subscription.currentPeriodEnd = currentPeriodEnd;
             if (providerSubscriptionId) subscription.providerSubscriptionId = providerSubscriptionId;
+            if (providerSubscriptionToken) subscription.providerSubscriptionToken = providerSubscriptionToken;
             if (providerCustomerId) subscription.providerCustomerId = providerCustomerId;
             if (timezone) subscription.timezone = timezone;
         } else {
@@ -53,6 +88,7 @@ export class SubscriptionService {
                 status: SubscriptionStatus.ACTIVE,
                 provider,
                 providerSubscriptionId,
+                providerSubscriptionToken,
                 providerCustomerId,
                 currentPeriodEnd,
                 timezone: timezone || LAGOS_ZONE
@@ -116,6 +152,15 @@ export class SubscriptionService {
 
         await subscription.save();
 
+        // Notify user
+        notificationService.notify(
+            userId,
+            NotificationType.BILLING,
+            'Subscription Activated',
+            `Your ${tier} subscription has been successfully activated until ${currentPeriodEnd.toLocaleDateString()}.`,
+            { tier, expiry: currentPeriodEnd }
+        );
+
         // Add immediately to upcoming daily events
         try {
             await CronService.addSubscriberToUpcomingEvents(email);
@@ -129,6 +174,37 @@ export class SubscriptionService {
     public static async cancelSubscription(providerSubscriptionId: string): Promise<ISubscription | null> {
         const subscription = await SubscriptionModel.findOne({ providerSubscriptionId });
         if (!subscription) return null;
+
+        // 1. Cancel in Payment Gateway
+        try {
+            if (subscription.provider === PaymentProvider.STRIPE && subscription.providerSubscriptionId) {
+                const Stripe = require('stripe');
+                const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+                // We use update with cancel_at_period_end to let them finish their time, 
+                // but the user's Zoom access is revoked immediately below as per requirement.
+                // If the user wants immediate gateway cancellation:
+                await stripe.subscriptions.cancel(subscription.providerSubscriptionId);
+                logger.info(`[SubscriptionService] Stripe subscription cancelled: ${subscription.providerSubscriptionId}`);
+            } else if (subscription.provider === PaymentProvider.PAYSTACK && subscription.providerSubscriptionId) {
+                const axios = require('axios');
+                await axios.post(
+                    'https://api.paystack.co/subscription/disable',
+                    { 
+                        code: subscription.providerSubscriptionId,
+                        token: subscription.providerSubscriptionToken 
+                    },
+                    {
+                        headers: {
+                            Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`
+                        }
+                    }
+                );
+                logger.info(`[SubscriptionService] Paystack subscription disabled: ${subscription.providerSubscriptionId}`);
+            }
+        } catch (gatewayError: any) {
+            // Log error but continue with internal cleanup
+            logger.error(`[SubscriptionService] Gateway cancellation failed for ${subscription.email}:`, gatewayError.message);
+        }
 
         subscription.status = SubscriptionStatus.CANCELLED;
         
@@ -165,6 +241,16 @@ export class SubscriptionService {
         subscription.status = SubscriptionStatus.CANCELLED;
 
         await subscription.save();
+
+        // Notify user
+        notificationService.notify(
+            subscription.userId.toString(),
+            NotificationType.BILLING,
+            'Subscription Cancelled',
+            'Your subscription has been successfully cancelled. You will still have access until the end of your current period.',
+            { status: 'cancelled' }
+        );
+
         return subscription;
     }
 

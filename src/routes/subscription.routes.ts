@@ -139,5 +139,7 @@ router.post('/stripe/initialize', authenticateUser, SubscriptionController.initi
 // Webhooks
 router.post('/paystack/webhook', SubscriptionController.handlePaystackWebhook);
 router.post('/stripe/webhook', SubscriptionController.handleStripeWebhook);
+router.post('/cancel', authenticateUser, SubscriptionController.cancel);
+router.post('/upgrade', authenticateUser, SubscriptionController.upgrade);
 
 export default router;

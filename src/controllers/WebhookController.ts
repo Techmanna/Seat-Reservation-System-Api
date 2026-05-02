@@ -37,6 +37,7 @@ export class WebhookController {
                     tier,
                     PaymentProvider.PAYSTACK,
                     data.subscription_code || data.reference,
+                    data.email_token,
                     data.customer.customer_code,
                     timezone,
                     data.amount / 100, // Convert Kobo to NGN
@@ -79,6 +80,7 @@ export class WebhookController {
                     tier,
                     PaymentProvider.STRIPE,
                     session.subscription || session.id,
+                    undefined, // Stripe doesn't use tokens for cancellation
                     session.customer,
                     timezone,
                     session.amount_total / 100, // Convert Cents to USD

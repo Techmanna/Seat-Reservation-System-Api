@@ -18,6 +18,7 @@ import { authenticateAdmin } from './middleware/auth';
 import subscriptionRoutes from './routes/subscription.routes';
 import eventRoutes from './routes/event.routes';
 import webhookRoutes from './routes/webhook.routes';
+import notificationRoutes from './routes/notification.routes';
 
 import swaggerUi from 'swagger-ui-express';
 import swaggerJSDoc from 'swagger-jsdoc';
@@ -129,6 +130,7 @@ app.use('/api/admin', authenticateAdmin, adminRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/webhooks', webhookRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {
@@ -142,29 +144,27 @@ app.use('*', (req, res) => {
 // Global error handler
 app.use(errorHandler);
 
+// Connect to database
+if (process.env.SKIP_DB !== 'true') {
+    connectDB().catch(err => logger.error('DB Connection Error:', err));
+}
+
 // Function to start the server
 const startServer = async (): Promise<void> => {
-  try {
-    // Optional: allow skipping DB for local docs preview
-    if (process.env.SKIP_DB !== 'true') {
-      await connectDB();
-    } else {
-      logger.warn('SKIP_DB is true: starting server without DB connection');
+    try {
+        app.listen(PORT, () => {
+            logger.info(`Server is running on port http://localhost:${PORT}`);
+            logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+        });
+    } catch (error) {
+        logger.error('Failed to start server:', error);
+        process.exit(1);
     }
-
-    // Start the server only after successful database connection
-    app.listen(PORT, () => {
-      logger.info(`Server is running on port http://localhost:${PORT}`);
-      logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    });
-
-  } catch (error) {
-    logger.error('Failed to start server:', error);
-    process.exit(1);
-  }
 };
 
-// Start the application
-startServer();
+// Start the application only when not in test mode
+if (process.env.NODE_ENV !== 'test') {
+    startServer();
+}
 
 export default app;

@@ -6,8 +6,73 @@ import { logger } from '../utils/logger';
 import { sendSMS } from '../utils/sms';
 import { BookingModel } from '../models/Booking';
 import { startOfDay, endOfDay } from 'date-fns';
+import { NotificationType } from '../models/Notification';
+import { NotificationPreferenceModel } from '../models/NotificationPreference';
+import { InAppNotificationService } from './InAppNotificationService';
+
+const inAppService = new InAppNotificationService();
 
 export class NotificationService {
+
+  /**
+   * Unified notification method that respects user preferences
+   */
+  async notify(
+    userId: string, 
+    type: NotificationType, 
+    title: string, 
+    message: string, 
+    data: any = {}
+  ): Promise<void> {
+    try {
+      const prefs = await inAppService.getPreferences(userId);
+      let categoryPrefs;
+
+      switch(type) {
+        case NotificationType.REMINDER:
+          categoryPrefs = prefs.reminders;
+          break;
+        case NotificationType.EVENT:
+          categoryPrefs = prefs.events;
+          break;
+        case NotificationType.BILLING:
+          categoryPrefs = prefs.billing;
+          break;
+        default:
+          categoryPrefs = { inApp: true, email: true, sms: false };
+      }
+
+      // 1. In-App Notification
+      if (categoryPrefs.inApp) {
+        await inAppService.createNotification(userId, type, title, message, data);
+      }
+
+      // 2. Email Notification
+      if (categoryPrefs.email) {
+        // Find user email
+        const { UserModel } = require('../models/User');
+        const user = await UserModel.findById(userId);
+        if (user && user.email) {
+          await sendEmail({
+            to: user.email,
+            subject: title,
+            html: this.createEmailTemplate(message, user.name || 'User')
+          });
+        }
+      }
+
+      // 3. SMS Notification
+      if (categoryPrefs.sms) {
+        const { UserModel } = require('../models/User');
+        const user = await UserModel.findById(userId);
+        if (user && user.phone) {
+          await sendSMS(user.phone, `${title}: ${message}`);
+        }
+      }
+    } catch (error) {
+      logger.error('[NotificationService] notify failed:', error);
+    }
+  }
 
   async sendBookingConfirmationEmail(user: User, booking: Booking, event: any): Promise<void> {
     const emailTemplates = new EmailTemplateBuilder();

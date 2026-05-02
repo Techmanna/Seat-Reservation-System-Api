@@ -9,6 +9,10 @@ import Stripe from 'stripe';
 import jwt from 'jsonwebtoken';
 import { SubscriptionDTO } from '../dtos/subscription.dto';
 import { ZoomService } from '../services/ZoomService';
+import { NotificationService } from '../services/NotificationService';
+import { NotificationType } from '../models/Notification';
+
+const notificationService = new NotificationService();
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_dummy', {
     apiVersion: '2026-04-22.dahlia',
@@ -362,8 +366,19 @@ export class SubscriptionController {
                         customer.email,
                         metadata.tier as SubscriptionTier,
                         PaymentProvider.PAYSTACK,
-                        reference,
+                        event.data.subscription_code || reference,
+                        event.data.email_token,
                         customer.id?.toString()
+                    );
+                }
+            } else if (event.event === 'charge.failed') {
+                const { metadata } = event.data;
+                if (metadata && metadata.userId) {
+                    await notificationService.notify(
+                        metadata.userId,
+                        NotificationType.BILLING,
+                        'Payment Failed',
+                        'Your recent payment attempt was unsuccessful. Please check your payment method.'
                     );
                 }
             }
@@ -401,15 +416,92 @@ export class SubscriptionController {
                         session.customer_details.email,
                         metadata.tier as SubscriptionTier,
                         PaymentProvider.STRIPE,
-                        session.id,
+                        session.subscription || session.id,
+                        undefined,
                         session.customer as string
                     );
                 }
+            } else if (event.type === 'checkout.session.async_payment_failed' || event.type === 'payment_intent.payment_failed') {
+                const session = event.data.object as any;
+                const metadata = session.metadata;
+                if (metadata && metadata.userId) {
+                    await notificationService.notify(
+                        metadata.userId,
+                        NotificationType.BILLING,
+                        'Payment Failed',
+                        'Your Stripe payment attempt failed. Please check your card details.'
+                    );
+                }
+            } else if (event.type === 'customer.subscription.deleted') {
+                const subscription = event.data.object as any;
+                await SubscriptionService.cancelSubscription(subscription.id);
             }
+
             res.status(200).send('Webhook received');
         } catch (error) {
             console.error('Stripe Webhook Processing Error:', error);
             res.status(500).send('Webhook Error');
+        }
+    }
+
+    public static async cancel(req: Request, res: Response): Promise<void> {
+        try {
+            const email = (req as any).user?.email;
+            if (!email) {
+                res.status(401).json({ success: false, message: "Unauthorized" });
+                return;
+            }
+
+            const subscription = await SubscriptionModel.findOne({ 
+                email, 
+                status: SubscriptionStatus.ACTIVE 
+            });
+
+            if (!subscription || !subscription.providerSubscriptionId) {
+                res.status(404).json({ success: false, message: "No active subscription found to cancel" });
+                return;
+            }
+
+            await SubscriptionService.cancelSubscription(subscription.providerSubscriptionId);
+
+            res.status(200).json({
+                success: true,
+                message: "Subscription successfully cancelled"
+            });
+        } catch (error: any) {
+            res.status(500).json({ success: false, message: error.message });
+        }
+    }
+
+    public static async upgrade(req: Request, res: Response): Promise<void> {
+        try {
+            const { newPlan, timezone } = req.body;
+            const email = (req as any).user?.email;
+            const userId = (req as any).user?.id;
+
+            if (!newPlan) {
+                res.status(400).json({ success: false, message: "New plan is required" });
+                return;
+            }
+
+            const subscription = await SubscriptionModel.findOne({ email });
+            
+            // If they have an existing provider, we prefer to stay with it for the upgrade
+            const provider = subscription?.provider || (newPlan.includes('USD') ? PaymentProvider.STRIPE : PaymentProvider.PAYSTACK);
+
+            // Forward to the appropriate initialization logic
+            req.body.plan = newPlan;
+            req.body.email = email;
+            req.body.userId = userId;
+            req.body.timezone = timezone;
+
+            if (provider === PaymentProvider.STRIPE) {
+                return await SubscriptionController.initializeStripe(req, res);
+            } else {
+                return await SubscriptionController.initializePaystack(req, res);
+            }
+        } catch (error: any) {
+            res.status(500).json({ success: false, message: error.message });
         }
     }
 }
