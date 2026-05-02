@@ -4,7 +4,7 @@ import { ZoomService } from './ZoomService';
 import mongoose from 'mongoose';
 import { CronService } from './CronService';
 import { EventModel } from '../models/Event';
-import { startOfDay, endOfDay } from 'date-fns';
+import { DateTime } from 'luxon';
 
 export class SubscriptionService {
     public static async activateSubscription(
@@ -18,18 +18,22 @@ export class SubscriptionService {
         amount?: number,
         currency?: string
     ): Promise<ISubscription> {
+        const LAGOS_ZONE = 'Africa/Lagos';
+        const now = DateTime.now().setZone(LAGOS_ZONE);
+        let periodEnd: DateTime;
+
         // Calculate period end based on tier
-        const currentPeriodEnd = new Date();
         if (tier === SubscriptionTier.TIER_1_NGN || tier === SubscriptionTier.TIER_1_USD) {
-            currentPeriodEnd.setDate(currentPeriodEnd.getDate() + 7);
+            periodEnd = now.plus({ days: 7 });
         } else if (tier === SubscriptionTier.TIER_2_NGN || tier === SubscriptionTier.TIER_2_USD) {
-            currentPeriodEnd.setDate(currentPeriodEnd.getDate() + 30);
+            periodEnd = now.plus({ days: 30 });
         } else if (tier === SubscriptionTier.TIER_3_NGN || tier === SubscriptionTier.TIER_3_USD) {
-            currentPeriodEnd.setDate(currentPeriodEnd.getDate() + 365);
+            periodEnd = now.plus({ days: 365 });
         } else {
-            currentPeriodEnd.setDate(currentPeriodEnd.getDate() + 30); // fallback
+            periodEnd = now.plus({ days: 30 }); // fallback
         }
 
+        const currentPeriodEnd = periodEnd.toJSDate();
         let subscription = await SubscriptionModel.findOne({ email });
 
         if (subscription) {
@@ -50,7 +54,7 @@ export class SubscriptionService {
                 providerSubscriptionId,
                 providerCustomerId,
                 currentPeriodEnd,
-                timezone: timezone || 'Africa/Lagos'
+                timezone: timezone || LAGOS_ZONE
             });
         }
 
@@ -139,9 +143,13 @@ export class SubscriptionService {
 
         // Remove from daily Zoom Meeting if event exists for today
         try {
-            const today = new Date();
+            const LAGOS_ZONE = 'Africa/Lagos';
+            const now = DateTime.now().setZone(LAGOS_ZONE);
+            const start = now.startOf('day').toJSDate();
+            const end = now.endOf('day').toJSDate();
+
             const event = await EventModel.findOne({
-                date: { $gte: startOfDay(today), $lte: endOfDay(today) }
+                date: { $gte: start, $lte: end }
             });
 
             if (event && event.zoomMeetingId && subscription.zoomRegistrantId) {
@@ -164,8 +172,9 @@ export class SubscriptionService {
         if (!subscription) return false;
         
         // Validate status and expiration constraints
+        const now = DateTime.now().toJSDate();
         const isValid = subscription.status === SubscriptionStatus.ACTIVE && 
-                        subscription.currentPeriodEnd > new Date();
+                        subscription.currentPeriodEnd > now;
         return isValid;
     }
 }

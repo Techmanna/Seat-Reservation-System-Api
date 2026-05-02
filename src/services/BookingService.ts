@@ -4,14 +4,7 @@ import { BookingModel } from "../models/Booking";
 import { SystemSettingsModel } from "../models/SystemSettings";
 import { QRService } from "./QRService";
 import { v4 as uuidv4 } from "uuid";
-import {
-  startOfDay,
-  endOfDay,
-  isAfter,
-  isBefore,
-  addMinutes,
-  isWithinInterval,
-} from "date-fns";
+import { DateTime } from "luxon";
 import {
   BookingRequest,
   Booking,
@@ -30,7 +23,7 @@ import { PendingBookingModel } from "../models/PendingBooking";
 import { getSystemSettings } from "./SettingsService";
 import config from "../config/environment";
 import * as crypto from "crypto";
-import { buildEventUtcDate, EVENT_HOUR_WAT, EVENT_MINUTE_WAT, getEventEndTime, getEventStartTime } from "../utils/formatDate";
+import { buildEventUtcDate, EVENT_HOUR_WAT, EVENT_MINUTE_WAT, getEventEndTime, getEventStartTime, getLagosEndOfDay, getLagosStartOfDay } from "../utils/formatDate";
 
 interface BookingRequestWithSeats extends Omit<BookingRequest, "seatNumbers"> {
   seatLabels: string[];
@@ -87,22 +80,16 @@ export class BookingService {
     try {
       // Perform all the validation checks first (same as original createBooking)
       const settings = await getSystemSettings();
-      const now = new Date();
-      const selected = startOfDay(new Date(bookingData.eventDate));
-      const start = startOfDay(settings.reservationOpenDate);
-      const end = endOfDay(settings.reservationCloseDate);
-      console.log({
-        now,
-        reservationOpenDate: settings.reservationOpenDate,
-        reservationCloseDate: settings.reservationCloseDate,
-        selectedDate: bookingData.eventDate,
-      });
-
+      const now = DateTime.now().setZone('Africa/Lagos').toJSDate();
+      const selected = getLagosStartOfDay(bookingData.eventDate);
+      const start = getLagosStartOfDay(settings.reservationOpenDate);
+      const end = getLagosEndOfDay(settings.reservationCloseDate);
+      
       // Check if reservations are open
       if (
         settings.reservationOpenDate &&
         settings.reservationCloseDate &&
-        !isWithinInterval(selected, { start, end })
+        (selected.getTime() < start.getTime() || selected.getTime() > end.getTime())
       ) {
         return {
           success: false,
@@ -113,7 +100,7 @@ export class BookingService {
 
       const eventDate = new Date(bookingData.eventDate);
       // Check if event date is in the future
-      if (isBefore(eventDate, startOfDay(now))) {
+      if (eventDate.getTime() < getLagosStartOfDay(now).getTime()) {
         return {
           success: false,
           message: "Cannot book for past dates",
@@ -139,8 +126,8 @@ export class BookingService {
         const existingBooking = await BookingModel.findOne({
           user: { _id: existingUser._id?.toString() },
           eventDate: {
-            $gte: startOfDay(eventDate),
-            $lte: endOfDay(eventDate),
+            $gte: getLagosStartOfDay(eventDate),
+            $lte: getLagosEndOfDay(eventDate),
           },
           status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
         });
@@ -158,8 +145,8 @@ export class BookingService {
           email: bookingData.email,
           bookingData: {
             eventDate: {
-              $gte: startOfDay(eventDate),
-              $lte: endOfDay(eventDate),
+              $gte: getLagosStartOfDay(eventDate),
+              $lte: getLagosEndOfDay(eventDate),
             },
           },
         });
@@ -185,8 +172,8 @@ export class BookingService {
       // Find or create event
       let event = await EventModel.findOne({
         date: {
-          $gte: startOfDay(eventDate),
-          $lte: endOfDay(eventDate),
+          $gte: getLagosStartOfDay(eventDate),
+          $lte: getLagosEndOfDay(eventDate),
         },
       });
 
@@ -245,8 +232,8 @@ export class BookingService {
 
       const pendingBookings = await PendingBookingModel.find({
         "bookingData.eventDate": {
-          $gte: startOfDay(eventDate),
-          $lte: endOfDay(eventDate),
+          $gte: getLagosStartOfDay(eventDate),
+          $lte: getLagosEndOfDay(eventDate),
         },
         expiresAt: { $gt: new Date() }, // Only check non-expired pending bookings
       }).select("bookingData.seatLabels bookingData.seatNumbers");
@@ -321,7 +308,7 @@ export class BookingService {
         // New user, require OTP verification
         const otp = this.generateOTP();
         const tempId = uuidv4();
-        const expiresAt = addMinutes(now, 10); // OTP expires in 10 minutes
+        const expiresAt = DateTime.now().plus({ minutes: 10 }).toJSDate(); // OTP expires in 10 minutes
 
         // Store or update OTP
         await OTPModel.findOneAndUpdate(
@@ -414,7 +401,7 @@ export class BookingService {
       }
 
       // Check if OTP is expired
-      if (isAfter(new Date(), otpRecord.expiresAt)) {
+      if (DateTime.now().toJSDate() > otpRecord.expiresAt) {
         await Promise.all([
           OTPModel.deleteOne({ _id: otpRecord._id }),
           PendingBookingModel.deleteOne({ email, tempId }),
@@ -513,8 +500,8 @@ export class BookingService {
       // Find event
       let event = await EventModel.findOne({
         date: {
-          $gte: startOfDay(eventDate),
-          $lte: endOfDay(eventDate),
+          $gte: getLagosStartOfDay(eventDate),
+          $lte: getLagosEndOfDay(eventDate),
         },
       });
 
@@ -693,9 +680,9 @@ export class BookingService {
         };
       }
 
-      const now = new Date();
+      const now = DateTime.now();
       const otp = this.generateOTP();
-      const expiresAt = addMinutes(now, 10);
+      const expiresAt = now.plus({ minutes: 10 }).toJSDate();
 
       // Update OTP record
       await OTPModel.findOneAndUpdate(
@@ -809,8 +796,8 @@ export class BookingService {
       // Find or get default event info
       let event = await EventModel.findOne({
         date: {
-          $gte: startOfDay(date),
-          $lte: endOfDay(date),
+          $gte: getLagosStartOfDay(date),
+          $lte: getLagosEndOfDay(date),
         },
       });
 
@@ -821,8 +808,8 @@ export class BookingService {
       // Get booked seats for this date
       const bookedSeats = await BookingModel.find({
         eventDate: {
-          $gte: startOfDay(date),
-          $lte: endOfDay(date),
+          $gte: getLagosStartOfDay(date),
+          $lte: getLagosEndOfDay(date),
         },
         status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
       }).select("seatNumbers seatLabels");
@@ -916,8 +903,8 @@ export class BookingService {
       if (eventDate) {
         const date = new Date(eventDate as string);
         query.eventDate = {
-          $gte: startOfDay(date),
-          $lte: endOfDay(date),
+          $gte: getLagosStartOfDay(date),
+          $lte: getLagosEndOfDay(date),
         };
       }
 
@@ -968,8 +955,8 @@ export class BookingService {
   }): Promise<ApiResponse<any>> {
     try {
       const settings = await getSystemSettings();
-      const now = new Date();
-      const today = startOfDay(now);
+      const now = DateTime.now().setZone('Africa/Lagos');
+      const today = now.startOf('day').toJSDate();
 
       // Build query for upcoming events
       const query: any = {
@@ -979,16 +966,16 @@ export class BookingService {
 
       // Add date range filters if provided
       if (startDate) {
-        query.date.$gte = startOfDay(new Date(startDate));
+        query.date.$gte = getLagosStartOfDay(startDate);
       }
 
       if (endDate) {
-        query.date.$lte = endOfDay(new Date(endDate));
+        query.date.$lte = getLagosEndOfDay(endDate);
       }
 
       // Ensure we don't go beyond reservation close date
       if (settings.reservationCloseDate) {
-        query.date.$lte = endOfDay(new Date(settings.reservationCloseDate));
+        query.date.$lte = getLagosEndOfDay(settings.reservationCloseDate);
       }
 
       const skip = (page - 1) * limit;
@@ -1009,8 +996,8 @@ export class BookingService {
           // Get booking statistics for this event
           const bookings = await BookingModel.find({
             eventDate: {
-              $gte: startOfDay(new Date(event.date)),
-              $lte: endOfDay(new Date(event.date)),
+              $gte: getLagosStartOfDay(event.date),
+              $lte: getLagosEndOfDay(event.date),
             },
             status: { $ne: BookingStatus.Cancelled },
           }).select("seatNumbers seatLabels status");
@@ -1031,12 +1018,9 @@ export class BookingService {
             event.availableSeats === 0 || totalBookedSeats >= event.totalSeats;
           const isBookable =
             !isFullyBooked &&
-            !isBefore(new Date(event.date), today) &&
+            DateTime.fromJSDate(new Date(event.date)).startOf('day') >= DateTime.now().setZone('Africa/Lagos').startOf('day') &&
             (!settings.reservationCloseDate ||
-              !isAfter(
-                new Date(event.date),
-                new Date(settings.reservationCloseDate)
-              ));
+              DateTime.fromJSDate(new Date(event.date)).startOf('day') <= DateTime.fromJSDate(new Date(settings.reservationCloseDate)).startOf('day'));
 
           // Check if it's a working day
           const eventDay = new Date(event.date).getDay();
@@ -1264,8 +1248,8 @@ export class BookingService {
   async getUpcomingEventsSummary(): Promise<ApiResponse<any>> {
     try {
       const settings = await getSystemSettings();
-      const now = new Date();
-      const today = startOfDay(now);
+      const now = DateTime.now().setZone('Africa/Lagos');
+      const today = now.startOf('day').toJSDate();
 
       // Get upcoming events count
       const upcomingEventsCount = await EventModel.countDocuments({
@@ -1288,8 +1272,8 @@ export class BookingService {
         nextEvents.map(async (event) => {
           const bookings = await BookingModel.find({
             eventDate: {
-              $gte: startOfDay(new Date(event.date)),
-              $lte: endOfDay(new Date(event.date)),
+              $gte: getLagosStartOfDay(event.date),
+              $lte: getLagosEndOfDay(event.date),
             },
             status: { $ne: BookingStatus.Cancelled },
           });

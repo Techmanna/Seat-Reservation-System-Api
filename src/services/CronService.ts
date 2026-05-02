@@ -3,22 +3,20 @@ import { SubscriptionModel } from '../models/Subscription';
 import { SubscriptionStatus } from '../types/subscription.type';
 import { ZoomService } from './ZoomService';
 import { sendEmail } from '../utils/email';
-import { addDays, startOfDay, endOfDay } from 'date-fns';
-import { toZonedTime, format as formatTz, fromZonedTime } from 'date-fns-tz';
-import { buildEventUtcDate, EVENT_HOUR_WAT, EVENT_MINUTE_WAT, EVENT_TIMEZONE, formatEventTimeForUser, getEventEndTime, getEventStartTime } from '../utils/formatDate';
+import { buildEventUtcDate, EVENT_HOUR_WAT, EVENT_MINUTE_WAT, EVENT_TIMEZONE, formatEventTimeForUser, getEventEndTime, getEventStartTime, getLagosEndOfDay, getLagosStartOfDay } from '../utils/formatDate';
 import { SeatUtils } from '../utils/seat';
 import { getSystemSettings } from './SettingsService';
 import { SubscriptionService } from './SubscriptionService';
+import { DateTime } from 'luxon';
 
 export class CronService {
     public static async createDailyEventsAndZoom(): Promise<void> {
         try {
-            const today = new Date();
             // Look ahead 2 days: ensure events exist for today, tomorrow, and the day after
             for (let i = 0; i <= 2; i++) {
-                const targetDay = addDays(today, i);
-                const dayStart = startOfDay(targetDay);
-                const dayEnd = endOfDay(targetDay);
+                const targetDay = DateTime.now().setZone(EVENT_TIMEZONE).plus({ days: i }).toJSDate();
+                const dayStart = getLagosStartOfDay(targetDay);
+                const dayEnd = getLagosEndOfDay(targetDay);
 
                 // Absolute UTC start for this event (11:00 WAT = 10:00 UTC)
                 const eventUtcDate = buildEventUtcDate(dayStart);
@@ -158,9 +156,9 @@ export class CronService {
             const subscription = await SubscriptionModel.findOne({ email, status: SubscriptionStatus.ACTIVE });
             if (!subscription) return;
 
-            const today = new Date();
-            const dayStart = startOfDay(today);
-            const dayEnd = endOfDay(today);
+            const today = DateTime.now().setZone(EVENT_TIMEZONE).toJSDate();
+            const dayStart = getLagosStartOfDay(today);
+            const dayEnd = getLagosEndOfDay(today);
             const eventUtcDate = buildEventUtcDate(dayStart);
 
             let event = await EventModel.findOne({

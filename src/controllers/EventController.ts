@@ -1,19 +1,16 @@
 import { Request, Response } from 'express';
 import { EventModel } from '../models/Event';
 import { EventDTO } from '../dtos/event.dto';
+import { DateTime } from 'luxon';
 
 export class EventController {
     public static async getNextEvent(req: Request, res: Response): Promise<void> {
         try {
-            const now = new Date();
+            const LAGOS_ZONE = 'Africa/Lagos';
+            const now = DateTime.now().setZone(LAGOS_ZONE);
 
-            // Fetch active events from the last 2 days onwards (by date field's date part only).
-            // We fetch a wider window and then filter in code using the `time` field,
-            // because the actual show time lives in event.time (e.g. "14:00"), not in the
-            // time component of the stored ISO date string.
-            const twoDaysAgo = new Date(now);
-            twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
-            twoDaysAgo.setHours(0, 0, 0, 0);
+            // Fetch active events from the last 2 days onwards
+            const twoDaysAgo = now.minus({ days: 2 }).startOf('day').toJSDate();
 
             const candidates = await EventModel.find({
                 isActive: true,
@@ -23,23 +20,36 @@ export class EventController {
                 .limit(10)
                 .lean();
 
-            // Reconstruct the real event datetime using the event's date (date part) + time field
+            // Reconstruct the real event datetimes in Lagos timezone
             const withRealTime = candidates.map(event => {
-                const datePart = new Date(event.date).toISOString().split('T')[0];
-                const realEventDate = new Date(`${datePart}T${event.time}:00`);
-                return { ...event, _realEventDate: realEventDate };
+                // Get the date part based on Lagos timezone
+                const datePart = DateTime.fromJSDate(new Date(event.date), { zone: LAGOS_ZONE }).toFormat('yyyy-MM-dd');
+                
+                // Reconstruct start and end times in Lagos context
+                const startDateTime = DateTime.fromISO(`${datePart}T${event.time}`, { zone: LAGOS_ZONE });
+                
+                // Use endTime if exists, otherwise fallback to 4 hours after start
+                const endDateTime = event.endTime 
+                    ? DateTime.fromISO(`${datePart}T${event.endTime}`, { zone: LAGOS_ZONE })
+                    : startDateTime.plus({ hours: 4 });
+
+                return { 
+                    ...event, 
+                    _startDateTime: startDateTime.toJSDate(),
+                    _endDateTime: endDateTime.toJSDate()
+                };
             });
 
-            // "Current" = started within the last 4 hours and not yet 4 hours past its start time
-            const WINDOW_MS = 4 * 60 * 60 * 1000; // 4 hours
+            const nowJs = now.toJSDate();
+
+            // "Current" = now is between start and end time
             const currentEvent = withRealTime.find(e =>
-                e._realEventDate.getTime() <= now.getTime() &&
-                now.getTime() <= e._realEventDate.getTime() + WINDOW_MS
+                nowJs >= e._startDateTime && nowJs < e._endDateTime
             ) || null;
 
-            // "Next" = all events strictly in the future (after now)
+            // "Next" = all events starting after now, excluding the current one if it exists
             const nextEvents = withRealTime.filter(e =>
-                e._realEventDate.getTime() > now.getTime()
+                e._startDateTime > nowJs && e._id.toString() !== currentEvent?._id?.toString()
             );
 
             res.json({
