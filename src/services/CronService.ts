@@ -5,7 +5,7 @@ import { ZoomService } from './ZoomService';
 import { sendEmail } from '../utils/email';
 import { addDays, startOfDay, endOfDay } from 'date-fns';
 import { toZonedTime, format as formatTz, fromZonedTime } from 'date-fns-tz';
-import { buildEventUtcDate, EVENT_HOUR_WAT, EVENT_MINUTE_WAT, EVENT_TIMEZONE, formatEventTimeForUser } from '../utils/formatDate';
+import { buildEventUtcDate, EVENT_HOUR_WAT, EVENT_MINUTE_WAT, EVENT_TIMEZONE, formatEventTimeForUser, getEventEndTime, getEventStartTime } from '../utils/formatDate';
 import { SeatUtils } from '../utils/seat';
 import { getSystemSettings } from './SettingsService';
 import { SubscriptionService } from './SubscriptionService';
@@ -14,8 +14,8 @@ export class CronService {
     public static async createDailyEventsAndZoom(): Promise<void> {
         try {
             const today = new Date();
-            // Look ahead 1 day: ensure events exist for today AND tomorrow
-            for (let i = 0; i <= 1; i++) {
+            // Look ahead 2 days: ensure events exist for today, tomorrow, and the day after
+            for (let i = 0; i <= 2; i++) {
                 const targetDay = addDays(today, i);
                 const dayStart = startOfDay(targetDay);
                 const dayEnd = endOfDay(targetDay);
@@ -36,15 +36,17 @@ export class CronService {
                     const totalSeats = SeatUtils.resolveTotalSeats(settings, dayStart)
                     event = await EventModel.create({
                         date: eventUtcDate,
-                        time: `${String(EVENT_HOUR_WAT).padStart(2, '0')}:${String(EVENT_MINUTE_WAT).padStart(2, '0')}`,
+                        time: getEventStartTime(),
+                        endTime: getEventEndTime(),
                         totalSeats,
                         availableSeats: totalSeats,
                         isActive: true,
                         title
                     });
-                } else if (event.date.getUTCHours() === 0 && event.date.getUTCMinutes() === 0) {
-                    // Backfill legacy events that were created at midnight UTC instead of 10:00 UTC
+                } else if (!event.endTime || (event.date.getUTCHours() === 0 && event.date.getUTCMinutes() === 0)) {
+                    // Backfill legacy events or fix incorrect midnight UTC dates
                     event.date = eventUtcDate;
+                    event.endTime = getEventEndTime();
                     await event.save();
                 }
 
@@ -169,7 +171,8 @@ export class CronService {
             if (!event) {
                 event = await EventModel.create({
                     date: eventUtcDate,
-                    time: `${String(EVENT_HOUR_WAT).padStart(2, '0')}:${String(EVENT_MINUTE_WAT).padStart(2, '0')}`,
+                    time: getEventStartTime(),
+                    endTime: getEventEndTime(),
                     totalSeats: 500,
                     availableSeats: 500,
                     isActive: true

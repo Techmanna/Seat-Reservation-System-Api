@@ -11,6 +11,10 @@ const eventSchema = new Schema<Event>({
     type: String,
     required: true
   },
+  endTime: {
+    type: String,
+    default: null
+  },
   totalSeats: {
     type: Number,
     required: true,

@@ -24,6 +24,7 @@ export interface Event {
     _id?: string;
     date: Date;
     time: string;
+    endTime?: string;
     totalSeats: number;
     availableSeats: number;
     isActive: boolean;

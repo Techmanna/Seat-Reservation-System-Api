@@ -30,7 +30,7 @@ import { PendingBookingModel } from "../models/PendingBooking";
 import { getSystemSettings } from "./SettingsService";
 import config from "../config/environment";
 import * as crypto from "crypto";
-import { buildEventUtcDate, EVENT_HOUR_WAT, EVENT_MINUTE_WAT } from "../utils/formatDate";
+import { buildEventUtcDate, EVENT_HOUR_WAT, EVENT_MINUTE_WAT, getEventEndTime, getEventStartTime } from "../utils/formatDate";
 
 interface BookingRequestWithSeats extends Omit<BookingRequest, "seatNumbers"> {
   seatLabels: string[];
@@ -198,7 +198,9 @@ export class BookingService {
         event = new EventModel({
           date: eventUtcDate,
           // time: settings.eventTimes[0] || "11:00",
-          time: `${String(EVENT_HOUR_WAT).padStart(2, '0')}:${String(EVENT_MINUTE_WAT).padStart(2, '0')}`,
+          // time: `${String(EVENT_HOUR_WAT).padStart(2, '0')}:${String(EVENT_MINUTE_WAT).padStart(2, '0')}`,
+          time: getEventStartTime(),
+          endTime: getEventEndTime(),
           totalSeats,
           availableSeats: totalSeats,
           isActive: true,
