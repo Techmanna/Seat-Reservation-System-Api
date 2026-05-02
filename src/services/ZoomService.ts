@@ -129,7 +129,7 @@ export class ZoomService {
                 type: 2, // Scheduled meeting
                 start_time: formattedStartTime,
                 timezone: timezone || 'UTC',
-                duration: 60,
+                duration: 120,
                 settings: {
                     approval_type: 0,
                     registration_type: 1,
