@@ -30,6 +30,7 @@ import { PendingBookingModel } from "../models/PendingBooking";
 import { getSystemSettings } from "./SettingsService";
 import config from "../config/environment";
 import * as crypto from "crypto";
+import { buildEventUtcDate, EVENT_HOUR_WAT, EVENT_MINUTE_WAT } from "../utils/formatDate";
 
 interface BookingRequestWithSeats extends Omit<BookingRequest, "seatNumbers"> {
   seatLabels: string[];
@@ -77,11 +78,11 @@ export class BookingService {
   async initiateBooking(bookingData: BookingRequest): Promise<
     | ApiResponse<Booking>
     | ApiResponse<{
-        tempId?: string;
-        expiresAt?: Date;
-        reservationToken: string;
-        requiresOTP: boolean;
-      }>
+      tempId?: string;
+      expiresAt?: Date;
+      reservationToken: string;
+      requiresOTP: boolean;
+    }>
   > {
     try {
       // Perform all the validation checks first (same as original createBooking)
@@ -191,12 +192,17 @@ export class BookingService {
 
       if (!event) {
         const totalSeats = SeatUtils.resolveTotalSeats(settings, eventDate)
+        const eventUtcDate = buildEventUtcDate(eventDate);
+        const title = `The Morayo Show Live - ${eventUtcDate.toDateString()}`;
+
         event = new EventModel({
-          date: eventDate,
-          time: settings.eventTimes[0] || "10:00 AM",
+          date: eventUtcDate,
+          // time: settings.eventTimes[0] || "11:00",
+          time: `${String(EVENT_HOUR_WAT).padStart(2, '0')}:${String(EVENT_MINUTE_WAT).padStart(2, '0')}`,
           totalSeats,
           availableSeats: totalSeats,
           isActive: true,
+          title,
         });
         await event.save();
       }
@@ -349,6 +355,14 @@ export class BookingService {
             otp,
             bookingData.name
           );
+          // Send OTP SMS for phone verification if phone number is provided
+          if (bookingData.phone) {
+            await this.notificationService.sendOTPSMS(
+              bookingData.phone,
+              otp,
+              bookingData.name
+            );
+          }
         } catch (emailError) {
           logger.error("Failed to send OTP email:", emailError);
           return {
@@ -439,9 +453,8 @@ export class BookingService {
         await otpRecord.save();
         return {
           success: false,
-          message: `Invalid verification code. ${
-            3 - otpRecord.attempts
-          } attempts remaining.`,
+          message: `Invalid verification code. ${3 - otpRecord.attempts
+            } attempts remaining.`,
           error: "Invalid OTP",
         };
       }
@@ -598,14 +611,19 @@ export class BookingService {
 
       // Send notifications
       try {
-        await Promise.all([
-          this.notificationService.sendTicketSMS(user.phone, ticketId),
+        const promises: Promise<any>[] = [
           this.notificationService.sendBookingConfirmationEmail(
             user,
             booking,
             event
-          ),
-        ]);
+          )
+        ];
+
+        if (user.phone) {
+          promises.push(this.notificationService.sendTicketSMS(user.phone, ticketId));
+        }
+
+        await Promise.all(promises);
       } catch (notificationError) {
         logger.error("Notification error:", notificationError);
       }
@@ -698,6 +716,15 @@ export class BookingService {
         otp,
         pendingBooking.bookingData.name
       );
+
+      // Send OTP SMS for phone verification if phone number is provided
+      if (pendingBooking.bookingData.phone) {
+        await this.notificationService.sendOTPSMS(
+          pendingBooking.bookingData.phone,
+          otp,
+          pendingBooking.bookingData.name
+        );
+      }
 
       return {
         success: true,
@@ -1159,8 +1186,8 @@ export class BookingService {
       // booking.event may be an ObjectId or a populated Event object
       const eventId =
         typeof booking.event === "object" &&
-        booking.event !== null &&
-        "_id" in booking.event
+          booking.event !== null &&
+          "_id" in booking.event
           ? (booking.event as any)._id
           : booking.event;
       const event = await EventModel.findById(eventId);

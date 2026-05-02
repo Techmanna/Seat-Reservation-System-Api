@@ -24,6 +24,22 @@ const eventSchema = new Schema<Event>({
   isActive: {
     type: Boolean,
     default: true
+  },
+  zoomMeetingId: {
+    type: String,
+    default: null
+  },
+  zoomMeetingUrl: {
+    type: String,
+    default: null
+  },
+  zoomPassword: {
+    type: String,
+    default: null
+  },
+  title: {
+    type: String,
+    default: null
   }
 }, {
   timestamps: true

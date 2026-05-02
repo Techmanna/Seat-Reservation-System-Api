@@ -1,0 +1,300 @@
+import { EventModel } from '../models/Event';
+import { SubscriptionModel } from '../models/Subscription';
+import { SubscriptionStatus } from '../types/subscription.type';
+import { ZoomService } from './ZoomService';
+import { sendEmail } from '../utils/email';
+import { addDays, startOfDay, endOfDay } from 'date-fns';
+import { toZonedTime, format as formatTz, fromZonedTime } from 'date-fns-tz';
+import { buildEventUtcDate, EVENT_HOUR_WAT, EVENT_MINUTE_WAT, EVENT_TIMEZONE, formatEventTimeForUser } from '../utils/formatDate';
+import { SeatUtils } from '../utils/seat';
+import { getSystemSettings } from './SettingsService';
+import { SubscriptionService } from './SubscriptionService';
+
+export class CronService {
+    public static async createDailyEventsAndZoom(): Promise<void> {
+        try {
+            const today = new Date();
+            // Look ahead 1 day: ensure events exist for today AND tomorrow
+            for (let i = 0; i <= 1; i++) {
+                const targetDay = addDays(today, i);
+                const dayStart = startOfDay(targetDay);
+                const dayEnd = endOfDay(targetDay);
+
+                // Absolute UTC start for this event (11:00 WAT = 10:00 UTC)
+                const eventUtcDate = buildEventUtcDate(dayStart);
+
+                const title = `The Morayo Show Live - ${eventUtcDate.toDateString()}`;
+
+                // Find or create the event
+                let event = await EventModel.findOne({
+                    date: { $gte: dayStart, $lte: dayEnd }
+                });
+
+                const settings = await getSystemSettings();
+
+                if (!event) {
+                    const totalSeats = SeatUtils.resolveTotalSeats(settings, dayStart)
+                    event = await EventModel.create({
+                        date: eventUtcDate,
+                        time: `${String(EVENT_HOUR_WAT).padStart(2, '0')}:${String(EVENT_MINUTE_WAT).padStart(2, '0')}`,
+                        totalSeats,
+                        availableSeats: totalSeats,
+                        isActive: true,
+                        title
+                    });
+                } else if (event.date.getUTCHours() === 0 && event.date.getUTCMinutes() === 0) {
+                    // Backfill legacy events that were created at midnight UTC instead of 10:00 UTC
+                    event.date = eventUtcDate;
+                    await event.save();
+                }
+
+                // Create Zoom meeting if missing
+                if (!event.zoomMeetingId) {
+                    try {
+                        const zoomData = await ZoomService.createMeeting(
+                            title,
+                            eventUtcDate,
+                            EVENT_TIMEZONE
+                        );
+                        event.zoomMeetingId = zoomData.id;
+                        event.zoomMeetingUrl = zoomData.join_url;
+                        event.zoomPassword = zoomData.password;
+                        await event.save();
+                    } catch (zoomError) {
+                        console.error(`[CronService] Zoom creation failed for ${eventUtcDate}:`, zoomError);
+                        continue;
+                    }
+                }
+
+                // Only register attendees and send emails for TODAY's event
+                if (i === 0) {
+                    const activeSubscriptions = await SubscriptionModel.find({
+                        status: SubscriptionStatus.ACTIVE,
+                        currentPeriodEnd: { $gte: targetDay }
+                    }).populate('user', 'name'); // <-- Populate the user document
+
+                    for (const sub of activeSubscriptions) {
+                        // Skip if already registered for this specific meeting (idempotent guard)
+                        if (sub.lastZoomMeetingId === event.zoomMeetingId) continue;
+
+                        try {
+                            const name = (sub as any).user?.name || 'Subscriber';
+                            const nameParts = name.split(' ');
+                            const firstName = nameParts[0] || 'Subscriber';
+                            const lastName = nameParts.slice(1).join(' ') || 'Member';
+
+                            const zoomRegistrant = await ZoomService.registerMeetingAttendee(
+                                event.zoomMeetingId!,
+                                sub.email,
+                                firstName,
+                                lastName
+                            );
+
+                            // sub.zoomJoinUrl = zoomRegistrant.join_url;
+                            sub.zoomRegistrantId = zoomRegistrant.registrant_id;
+                            sub.lastZoomMeetingId = event.zoomMeetingId;
+                            await sub.save();
+
+                            // Record Event Registration History
+                            try {
+                                const { EventRegistrationModel } = require('../models/EventRegistration');
+                                await EventRegistrationModel.findOneAndUpdate(
+                                    { userId: sub.userId, eventId: event._id },
+                                    {
+                                        email: sub.email,
+                                        zoomMeetingId: event.zoomMeetingId,
+                                        zoomRegistrantId: zoomRegistrant.registrant_id,
+                                        zoomJoinUrl: zoomRegistrant.join_url,
+                                        registrationType: 'daily_meeting'
+                                    },
+                                    { upsert: true, new: true }
+                                );
+                            } catch (historyError) {
+                                console.error("[CronService] Failed to record registration history:", historyError);
+                            }
+
+                            // Build localised time string for this subscriber
+                            const userTz = sub.timezone || EVENT_TIMEZONE;
+                            const localEventTime = formatEventTimeForUser(event.date, userTz);
+
+                            await sendEmail({
+                                to: sub.email,
+                                subject: `Your Zoom Access — The Morayo Show · ${localEventTime}`,
+                                html: `
+                                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eaeaea; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                                        <div style="background: linear-gradient(135deg, #E8593C 0%, #764ba2 100%); padding: 24px; text-align: center; color: white;">
+                                            <h2 style="margin: 0; font-size: 24px;">The Morayo Show — Live Access</h2>
+                                        </div>
+                                        <div style="padding: 24px; background-color: #ffffff;">
+                                            <p style="font-size: 16px;">Hello Subscriber,</p>
+                                            <p>You are registered for today's live session. Here are your details:</p>
+                                            <div style="background-color: #f8f9fa; border-left: 4px solid #E8593C; padding: 16px; margin: 20px 0; border-radius: 4px;">
+                                                <p style="margin: 6px 0;"><strong>📅 Event Time (your local time):</strong> ${localEventTime}</p>
+                                                <p style="margin: 6px 0;"><strong>🌍 Also in WAT:</strong> ${formatEventTimeForUser(event.date, EVENT_TIMEZONE)}</p>
+                                                <p style="margin: 6px 0; display: none;"><strong>🔗 Join URL:</strong><br/>
+                                                    <a href="${zoomRegistrant.join_url}" style="color: #E8593C; word-break: break-all;">${zoomRegistrant.join_url}</a>
+                                                </p>
+                                                ${event.zoomPassword ? `<p style="margin: 6px 0;"><strong>🔐 Passcode:</strong> ${event.zoomPassword}</p>` : ''}
+                                            </div>
+                                            <p style="color: #7f8c8d; font-size: 13px;">⚠️ Do not share this link. Only one device can connect per registration.</p>
+                                        </div>
+                                    </div>
+                                `
+                            });
+                        } catch (regError) {
+                            console.error(`[CronService] Attendee mapping failed for ${sub.email}:`, regError);
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('[CronService] Background sync execution failed:', error);
+        }
+    }
+
+    public static async addSubscriberToUpcomingEvents(email: string): Promise<void> {
+        try {
+            const subscription = await SubscriptionModel.findOne({ email, status: SubscriptionStatus.ACTIVE });
+            if (!subscription) return;
+
+            const today = new Date();
+            const dayStart = startOfDay(today);
+            const dayEnd = endOfDay(today);
+            const eventUtcDate = buildEventUtcDate(dayStart);
+
+            let event = await EventModel.findOne({
+                date: { $gte: dayStart, $lte: dayEnd }
+            });
+
+            if (!event) {
+                event = await EventModel.create({
+                    date: eventUtcDate,
+                    time: `${String(EVENT_HOUR_WAT).padStart(2, '0')}:${String(EVENT_MINUTE_WAT).padStart(2, '0')}`,
+                    totalSeats: 500,
+                    availableSeats: 500,
+                    isActive: true
+                });
+            }
+
+            if (!event.zoomMeetingId) {
+                const zoomData = await ZoomService.createMeeting(
+                    `The Morayo Show Live - ${eventUtcDate.toDateString()}`,
+                    eventUtcDate,
+                    EVENT_TIMEZONE
+                );
+                event.zoomMeetingId = zoomData.id;
+                event.zoomMeetingUrl = zoomData.join_url;
+                event.zoomPassword = zoomData.password;
+                await event.save();
+            }
+
+            const zoomRegistrant = await ZoomService.registerMeetingAttendee(
+                event.zoomMeetingId!,
+                email,
+                'Subscriber',
+                'Member'
+            );
+
+            subscription.zoomJoinUrl = zoomRegistrant.join_url;
+            subscription.zoomRegistrantId = zoomRegistrant.registrant_id;
+            subscription.lastZoomMeetingId = event.zoomMeetingId;
+            await subscription.save();
+
+            // Record Event Registration History
+            try {
+                const { EventRegistrationModel } = require('../models/EventRegistration');
+                await EventRegistrationModel.findOneAndUpdate(
+                    { userId: subscription.userId, eventId: event._id },
+                    {
+                        email: subscription.email,
+                        zoomMeetingId: event.zoomMeetingId,
+                        zoomRegistrantId: zoomRegistrant.registrant_id,
+                        zoomJoinUrl: zoomRegistrant.join_url,
+                        registrationType: 'daily_meeting'
+                    },
+                    { upsert: true, new: true }
+                );
+            } catch (historyError) {
+                console.error("[CronService] Failed to record registration history:", historyError);
+            }
+
+            const userTz = subscription.timezone || EVENT_TIMEZONE;
+            const localEventTime = formatEventTimeForUser(event.date, userTz);
+
+            await sendEmail({
+                to: email,
+                subject: `Welcome! Your Zoom access for The Morayo Show — ${localEventTime}`,
+                html: `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eaeaea; border-radius: 10px; overflow: hidden;">
+                        <div style="background: linear-gradient(135deg, #E8593C 0%, #764ba2 100%); padding: 24px; text-align: center; color: white;">
+                            <h2 style="margin: 0;">The Morayo Show — You're In!</h2>
+                        </div>
+                        <div style="padding: 24px; background-color: #ffffff;">
+                            <p>Your subscription is active and here is today's join link:</p>
+                            <div style="background-color: #f8f9fa; border-left: 4px solid #E8593C; padding: 16px; margin: 20px 0; border-radius: 4px;">
+                                <p style="margin: 6px 0;"><strong>📅 Start Time:</strong> ${localEventTime}</p>
+                                <p style="margin: 6px 0;"><strong>🔗 Join URL:</strong><br/>
+                                    <a href="${zoomRegistrant.join_url}" style="color: #E8593C; word-break: break-all;">${zoomRegistrant.join_url}</a>
+                                </p>
+                                ${event.zoomPassword ? `<p style="margin: 6px 0;"><strong>🔐 Passcode:</strong> ${event.zoomPassword}</p>` : ''}
+                            </div>
+                            <p style="color: #7f8c8d; font-size: 13px;">⚠️ Do not share this link. Only one device can connect per registration.</p>
+                        </div>
+                    </div>
+                `
+            });
+        } catch (error) {
+            console.error(`[CronService] Immediate subscriber addition failed for ${email}:`, error);
+        }
+    }
+
+    public static async checkAndCleanupExpiredSubscriptions(): Promise<void> {
+        try {
+            const now = new Date();
+            // Find active subscriptions that have passed their period end
+            const expiredSubscriptions = await SubscriptionModel.find({
+                status: SubscriptionStatus.ACTIVE,
+                currentPeriodEnd: { $lt: now }
+            });
+
+            if (expiredSubscriptions.length === 0) return;
+
+            console.log(`[CronService] Found ${expiredSubscriptions.length} expired subscriptions. Cleaning up...`);
+
+            for (const sub of expiredSubscriptions) {
+                try {
+                    // We use the subscription service to handle the complex cancellation logic 
+                    // (removing from Zoom, clearing join URLs, etc.)
+                    // If providerSubscriptionId is missing (e.g. for some manual subs), 
+                    // we'll need to handle it.
+                    if (sub.providerSubscriptionId) {
+                        await SubscriptionService.cancelSubscription(sub.providerSubscriptionId);
+                    } else {
+                        // Manual cleanup for subscriptions without provider IDs
+                        sub.status = SubscriptionStatus.CANCELLED;
+                        sub.zoomJoinUrl = undefined;
+                        sub.zoomRegistrantId = undefined;
+                        await sub.save();
+                    }
+                    console.log(`[CronService] Deactivated expired subscription for: ${sub.email}`);
+                } catch (subError) {
+                    console.error(`[CronService] Failed to cleanup sub for ${sub.email}:`, subError);
+                }
+            }
+        } catch (error) {
+            console.error('[CronService] Expired subscription cleanup failed:', error);
+        }
+    }
+
+    public static startBackgroundJobs(): void {
+        // Run immediately on startup
+        this.createDailyEventsAndZoom();
+        this.checkAndCleanupExpiredSubscriptions();
+
+        // Then re-run every 12 hours
+        setInterval(() => {
+            this.createDailyEventsAndZoom();
+            this.checkAndCleanupExpiredSubscriptions();
+        }, 12 * 60 * 60 * 1000);
+    }
+}

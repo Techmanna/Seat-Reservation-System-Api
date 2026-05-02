@@ -5,9 +5,17 @@ export interface User {
     _id?: string;
     name: string;
     email: string;
-    phone: string;
-    gender: 'male' | 'female' | 'other';
-    ageRange: '18-25' | '26-35' | '36-45' | '46-55' | '55+';
+    phone?: string;
+    gender?: 'male' | 'female' | 'other';
+    ageRange?: '18-25' | '26-35' | '36-45' | '46-55' | '55+';
+    password?: string;
+    googleId?: string;
+    authProvider: 'local' | 'google';
+    isVerified?: boolean;
+    verificationToken?: string;
+    verificationExpiry?: Date;
+    resetPasswordToken?: string;
+    resetPasswordExpiry?: Date;
     createdAt?: Date;
     updatedAt?: Date;
 }
@@ -23,6 +31,10 @@ export interface Event {
     updatedAt?: Date;
     location?:string;
     sessionName?:string;
+    zoomMeetingId?: string;
+    zoomMeetingUrl?: string;
+    zoomPassword?: string;
+    title?: string;
 }
 
 export enum BookingStatus {
@@ -159,6 +171,7 @@ export interface AdminLoginRequest {
 
 export interface AuthRequest extends Request {
     admin?: any;
+    user?: any;
 }
 
 export interface PendingBooking {

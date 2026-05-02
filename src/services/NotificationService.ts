@@ -16,7 +16,7 @@ export class NotificationService {
     const mailOptions = {
       from: config.mail.from,
       to: user.email,
-      subject: 'Booking Confirmation - Event Hall Reservation',
+      subject: 'Booking Confirmation',
       html,
     };
 
@@ -24,7 +24,7 @@ export class NotificationService {
   }
 
   async sendTicketSMS(phone: string, ticketId: string): Promise<void> {
-    const message = `Your event hall booking is confirmed! Ticket ID: ${ticketId}. Please keep this for verification at the event.`;
+    const message = `Your booking is confirmed! Ticket ID: ${ticketId}. Please keep this for verification at the event.`;
 
     await sendSMS(phone, message);
   }
@@ -35,10 +35,10 @@ export class NotificationService {
         const mailOptions = {
           from: process.env.FROM_EMAIL || 'noreply@eventhall.com',
           to: user.email,
-          subject: 'Event Hall Notification',
+          subject: 'The Morayo Show',
           html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-              <h2 style="color: #333;">Event Hall Notification</h2>
+              <h2 style="color: #333;">The Morayo Show</h2>
               <p>Dear ${user.name},</p>
               <p>${message}</p>
               <hr style="margin: 30px 0;">
@@ -52,8 +52,10 @@ export class NotificationService {
       });
       await Promise.all(promises);
     } else {
-      const phoneNumbers = users.map(user => user.phone);
-      await sendSMS(phoneNumbers, message);
+      const phoneNumbers = users.map(user => user.phone).filter((p): p is string => !!p);
+      if (phoneNumbers.length > 0) {
+        await sendSMS(phoneNumbers, message);
+      }
     }
   }
 
@@ -74,6 +76,12 @@ export class NotificationService {
     } catch (error) {
       logger.error('Failed to send OTP email2:', error);
     }
+  }
+
+  // Send OTP via SMS
+  async sendOTPSMS(phone: string, otp: string, name: string): Promise<void> {
+    const message = `MAB Studios, Your OTP code is: ${otp}. It is valid for 10 minutes.`;
+    await sendSMS(phone, message);
   }
 
   // Send welcome email

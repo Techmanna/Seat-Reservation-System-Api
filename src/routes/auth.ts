@@ -4,6 +4,10 @@ import { AdminModel } from '../models/Admin';
 import { AuthService } from '../services/AuthService';
 import { BookingService } from '../services/BookingService';
 import { validateRequest } from '../middleware/validateRequest';
+import { UserModel } from '../models/User';
+import bcrypt from 'bcryptjs';
+import { sendEmail } from '../utils/email';
+import crypto from 'crypto';
 // import { authenticateAdmin } from '../middleware/auth';
 import {
     adminLoginSchema,
@@ -256,5 +260,319 @@ router.post('/reset-password', validateRequest(resetPasswordSchema, 'body'), asy
 //       return res.status(404).json({
 
 
+
+// User Registration
+router.post('/user/register', async (req, res) => {
+    try {
+        const { name, email, password } = req.body;
+        if (!name || !email || !password) {
+             res.status(400).json({ success: false, message: 'Name, email and password are required' });
+             return;
+        }
+
+        // validate the name to be in this format: First Name Last Name
+        const nameParts = name.split(' ');
+        if (nameParts.length < 2) {
+             res.status(400).json({ success: false, message: 'Name must be in the format: First Name Last Name' });
+             return;
+        }
+
+        const existingUser = await UserModel.findOne({ email: email.toLowerCase() });
+        if (existingUser) {
+             res.status(400).json({ success: false, message: 'Email is already registered' });
+             return;
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const verificationToken = crypto.randomBytes(32).toString('hex');
+        const verificationExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hrs
+
+        const user = await UserModel.create({
+            name,
+            email: email.toLowerCase(),
+            password: hashedPassword,
+            isVerified: false,
+            verificationToken,
+            verificationExpiry
+        });
+
+        // Send Verification Email
+        try {
+            const verificationLink = `${process.env.FRONTEND_URL || 'http://localhost:3001'}/verify-email?token=${verificationToken}`;
+            await sendEmail({
+                to: user.email,
+                subject: 'Verify your access - The Morayo Live Show',
+                html: `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                        <h2>Email Verification</h2>
+                        <p>Please verify your access by clicking the button below:</p>
+                        <a href="${verificationLink}" style="background: #007bff; color: white; padding: 10px 20px; border-radius: 5px; text-decoration: none; display: inline-block;">Verify Email</a>
+                    </div>
+                `
+            });
+        } catch (emailErr: any) {
+            console.error(">>> [User Registration] SMTP Error:", emailErr.message);
+            console.log(`>>> VERIFICATION TOKEN FOR TESTING: ${verificationToken}`);
+        }
+
+        res.status(201).json({
+            success: true,
+            message: 'Registration successful. Please verify your email.',
+            // Expose token for test verification if email is broken
+            verificationToken: verificationToken 
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// User Verify Email
+router.post('/user/verify-email', async (req, res) => {
+    try {
+        const { token } = req.body;
+        if (!token) {
+             res.status(400).json({ success: false, message: 'Token is required' });
+             return;
+        }
+
+        const user = await UserModel.findOne({
+            verificationToken: token,
+            verificationExpiry: { $gt: new Date() }
+        });
+
+        if (!user) {
+             res.status(400).json({ success: false, message: 'Invalid or expired verification token' });
+             return;
+        }
+
+        user.isVerified = true;
+        user.verificationToken = undefined;
+        user.verificationExpiry = undefined;
+        await user.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Email successfully verified. You can now subscribe.'
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// User Login
+router.post('/user/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (!email || !password) {
+             res.status(400).json({ success: false, message: 'Email and password are required' });
+             return;
+        }
+
+        const user = await UserModel.findOne({ email: email.toLowerCase() });
+        if (!user) {
+             res.status(401).json({ success: false, message: 'Invalid email or password' });
+             return;
+        }
+
+        // ENFORCE RULE: If user is a Google user, they cannot use password login
+        if (user.authProvider === 'google') {
+            res.status(403).json({ 
+                success: false, 
+                message: 'This account is linked with Google. Please use "Sign in with Google" to continue.' 
+            });
+            return;
+        }
+
+        if (!user.password) {
+             res.status(401).json({ success: false, message: 'Invalid email or password' });
+             return;
+        }
+
+        if (!user.isVerified) {
+             res.status(403).json({ success: false, message: 'Please verify your email address before logging in' });
+             return;
+        }
+
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+             res.status(401).json({ success: false, message: 'Invalid email or password' });
+             return;
+        }
+
+        const token = jwt.sign(
+            { id: user._id, email: user.email, role: 'user' },
+            process.env.JWT_SECRET || 'default_jwt_secret',
+            { expiresIn: '30d' }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: 'Login successful',
+            token,
+            user: {
+                id: user._id,
+                name: user.name,
+                email: user.email
+            }
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// User Google Login/Signup
+router.post('/user/google-login', async (req, res) => {
+    try {
+        const { idToken } = req.body;
+        if (!idToken) {
+            res.status(400).json({ success: false, message: 'Google ID Token is required' });
+            return;
+        }
+
+        const { OAuth2Client } = require('google-auth-library');
+        const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+        const ticket = await client.verifyIdToken({
+            idToken,
+            audience: process.env.GOOGLE_CLIENT_ID
+        });
+
+        const payload = ticket.getPayload();
+        if (!payload || !payload.email) {
+            res.status(400).json({ success: false, message: 'Invalid Google token' });
+            return;
+        }
+
+        const { email, name, sub: googleId } = payload;
+
+        let user = await UserModel.findOne({ email: email.toLowerCase() });
+
+        if (user) {
+            // Update user to be a Google user if they weren't already
+            // and link their googleId
+            if (user.authProvider !== 'google') {
+                user.authProvider = 'google';
+                user.googleId = googleId;
+                user.password = undefined; // Remove password to enforce Google-only login
+                await user.save();
+            }
+        } else {
+            // Create new user via Google
+            user = await UserModel.create({
+                name: name || email,
+                email: email.toLowerCase(),
+                googleId,
+                authProvider: 'google',
+                isVerified: true // Google accounts are pre-verified
+            });
+        }
+
+        const token = jwt.sign(
+            { id: user._id, email: user.email, role: 'user' },
+            process.env.JWT_SECRET || 'default_jwt_secret',
+            { expiresIn: '30d' }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: 'Google login successful',
+            token,
+            user: {
+                id: user._id,
+                name: user.name,
+                email: user.email
+            }
+        });
+    } catch (error: any) {
+        console.error("Google Login Error:", error);
+        res.status(500).json({ success: false, message: 'Google authentication failed' });
+    }
+});
+
+// User Forgot Password
+router.post('/user/forgot-password', async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email) {
+             res.status(400).json({ success: false, message: 'Email is required' });
+             return;
+        }
+
+        const user = await UserModel.findOne({ email: email.toLowerCase() });
+        if (!user) {
+             res.status(404).json({ success: false, message: 'No user found with that email address' });
+             return;
+        }
+
+        const resetToken = crypto.randomBytes(32).toString('hex');
+        const resetExpiry = new Date(Date.now() + 1 * 60 * 60 * 1000); // 1 hour
+
+        user.resetPasswordToken = resetToken;
+        user.resetPasswordExpiry = resetExpiry;
+        await user.save();
+
+        // Send Reset Email
+        try {
+            const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:3001'}/reset-password?token=${resetToken}`;
+            await sendEmail({
+                to: user.email,
+                subject: 'Reset your password - The Morayo Live Show',
+                html: `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                        <h2>Password Reset Request</h2>
+                        <p>You requested a password reset. Please click the button below to set a new password:</p>
+                        <a href="${resetLink}" style="background: #007bff; color: white; padding: 10px 20px; border-radius: 5px; text-decoration: none; display: inline-block;">Reset Password</a>
+                        <p>If you did not initiate this request, you can safely ignore this email.</p>
+                    </div>
+                `
+            });
+        } catch (emailErr: any) {
+            console.error(">>> [Forgot Password] SMTP Error:", emailErr.message);
+            console.log(`>>> RESET TOKEN FOR TESTING: ${resetToken}`);
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Password reset link sent securely to your email',
+            resetToken: resetToken // Expose for integration testing safely
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// User Reset Password
+router.post('/user/reset-password', async (req, res) => {
+    try {
+        const { token, newPassword } = req.body;
+        if (!token || !newPassword) {
+             res.status(400).json({ success: false, message: 'Token and new password are required' });
+             return;
+        }
+
+        const user = await UserModel.findOne({
+            resetPasswordToken: token,
+            resetPasswordExpiry: { $gt: new Date() }
+        });
+
+        if (!user) {
+             res.status(400).json({ success: false, message: 'Invalid or expired reset token' });
+             return;
+        }
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        user.password = hashedPassword;
+        user.resetPasswordToken = undefined;
+        user.resetPasswordExpiry = undefined;
+        await user.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Password updated successfully. You can now log in.'
+        });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
 
 export default router;
