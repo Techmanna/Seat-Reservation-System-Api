@@ -204,7 +204,7 @@ export class SubscriptionController {
                 lastName
             );
 
-            subscription.zoomJoinUrl = zoomRegistrant.join_url;
+            // subscription.zoomJoinUrl = zoomRegistrant.join_url;
             subscription.zoomRegistrantId = zoomRegistrant.registrant_id;
             subscription.lastZoomMeetingId = meetingId;
             await subscription.save();
