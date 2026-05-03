@@ -6,14 +6,15 @@ export interface User {
     name: string;
     email: string;
     phone?: string;
+    country?: string;
     gender?: 'male' | 'female' | 'other';
     ageRange?: '18-25' | '26-35' | '36-45' | '46-55' | '55+';
     password?: string;
     googleId?: string;
     authProvider: 'local' | 'google';
     isVerified?: boolean;
-    verificationToken?: string;
-    verificationExpiry?: Date;
+    verificationOtp?: string;
+    verificationOtpExpiry?: Date;
     resetPasswordToken?: string;
     resetPasswordExpiry?: Date;
     createdAt?: Date;

@@ -504,4 +504,24 @@ export class SubscriptionController {
             res.status(500).json({ success: false, message: error.message });
         }
     }
+
+    public static async getBillingHistory(req: Request, res: Response): Promise<void> {
+        try {
+            const email = (req as any).user?.email;
+            if (!email) {
+                res.status(401).json({ success: false, message: "Unauthorized" });
+                return;
+            }
+
+            const history = await SubscriptionService.getBillingHistory(email);
+
+            res.status(200).json({
+                success: true,
+                message: "Billing history fetched successfully",
+                data: history
+            });
+        } catch (error: any) {
+            res.status(500).json({ success: false, message: error.message });
+        }
+    }
 }

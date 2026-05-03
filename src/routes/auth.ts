@@ -266,7 +266,7 @@ router.post('/reset-password', validateRequest(resetPasswordSchema, 'body'), asy
 // User Registration
 router.post('/user/register', async (req, res) => {
     try {
-        const { name, email, password } = req.body;
+        const { name, email, password, phone, country } = req.body;
         if (!name || !email || !password) {
              res.status(400).json({ success: false, message: 'Name, email and password are required' });
              return;
@@ -286,76 +286,148 @@ router.post('/user/register', async (req, res) => {
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
-        const verificationToken = crypto.randomBytes(32).toString('hex');
-        const verificationExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hrs
+        const verificationOtp = Math.floor(100000 + Math.random() * 900000).toString(); // 6 digits
+        const verificationOtpExpiry = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
 
         const user = await UserModel.create({
             name,
             email: email.toLowerCase(),
             password: hashedPassword,
+            phone,
+            country,
             isVerified: false,
-            verificationToken,
-            verificationExpiry
+            verificationOtp,
+            verificationOtpExpiry
         });
 
         // Send Verification Email
         try {
-            const verificationLink = `${process.env.FRONTEND_URL || 'http://localhost:3001'}/verify-email?token=${verificationToken}`;
             await sendEmail({
                 to: user.email,
-                subject: 'Verify your access - The Morayo Live Show',
+                subject: `${verificationOtp} is your verification code - The Morayo Live Show`,
                 html: `
-                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                        <h2>Email Verification</h2>
-                        <p>Please verify your access by clicking the button below:</p>
-                        <a href="${verificationLink}" style="background: #007bff; color: white; padding: 10px 20px; border-radius: 5px; text-decoration: none; display: inline-block;">Verify Email</a>
+                    <div style="font-family: 'Inter', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 40px; border: 1px solid #f0f0f0; border-radius: 16px;">
+                        <div style="text-align: center; margin-bottom: 32px;">
+                            <img src="https://themorayoshow.com/tmas-logo-dark.png" alt="TMAS Logo" style="height: 40px;">
+                        </div>
+                        <h2 style="font-family: 'Fraunces', serif; font-style: italic; color: #1a1a1a; font-size: 24px; text-align: center; margin-bottom: 24px;">Verify your access.</h2>
+                        <p style="color: #666; font-size: 16px; line-height: 1.6; text-align: center; margin-bottom: 32px;">
+                            Thank you for joining The Morayo Live Show. Use the 6-digit code below to verify your email address and complete your registration.
+                        </p>
+                        <div style="background: #f8f8f6; border-radius: 12px; padding: 24px; text-align: center; margin-bottom: 32px;">
+                            <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #E8593C;">${verificationOtp}</span>
+                        </div>
+                        <p style="color: #999; font-size: 13px; text-align: center;">
+                            This code will expire in 15 minutes. If you did not request this, you can safely ignore this email.
+                        </p>
                     </div>
                 `
             });
         } catch (emailErr: any) {
             console.error(">>> [User Registration] SMTP Error:", emailErr.message);
-            console.log(`>>> VERIFICATION TOKEN FOR TESTING: ${verificationToken}`);
+            console.log(`>>> VERIFICATION OTP FOR TESTING: ${verificationOtp}`);
         }
 
         res.status(201).json({
             success: true,
             message: 'Registration successful. Please verify your email.',
-            // Expose token for test verification if email is broken
-            verificationToken: verificationToken 
+            email: user.email
         });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
     }
 });
 
-// User Verify Email
+// User Verify Email OTP
 router.post('/user/verify-email', async (req, res) => {
     try {
-        const { token } = req.body;
-        if (!token) {
-             res.status(400).json({ success: false, message: 'Token is required' });
+        const { email, otp } = req.body;
+        if (!email || !otp) {
+             res.status(400).json({ success: false, message: 'Email and OTP are required' });
              return;
         }
 
         const user = await UserModel.findOne({
-            verificationToken: token,
-            verificationExpiry: { $gt: new Date() }
+            email: email.toLowerCase(),
+            verificationOtp: otp,
+            verificationOtpExpiry: { $gt: new Date() }
         });
 
         if (!user) {
-             res.status(400).json({ success: false, message: 'Invalid or expired verification token' });
+             res.status(400).json({ success: false, message: 'Invalid or expired verification code' });
              return;
         }
 
         user.isVerified = true;
-        user.verificationToken = undefined;
-        user.verificationExpiry = undefined;
+        user.verificationOtp = undefined;
+        user.verificationOtpExpiry = undefined;
         await user.save();
 
         res.status(200).json({
             success: true,
             message: 'Email successfully verified. You can now subscribe.'
         });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// User Resend OTP
+router.post('/user/resend-otp', async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email) {
+            res.status(400).json({ success: false, message: 'Email is required' });
+            return;
+        }
+
+        const user = await UserModel.findOne({ email: email.toLowerCase() });
+        if (!user) {
+            res.status(404).json({ success: false, message: 'User not found' });
+            return;
+        }
+
+        if (user.isVerified) {
+            res.status(400).json({ success: false, message: 'Email is already verified' });
+            return;
+        }
+
+        const verificationOtp = Math.floor(100000 + Math.random() * 900000).toString();
+        const verificationOtpExpiry = new Date(Date.now() + 15 * 60 * 1000);
+
+        user.verificationOtp = verificationOtp;
+        user.verificationOtpExpiry = verificationOtpExpiry;
+        await user.save();
+
+        // Send Email
+        try {
+            await sendEmail({
+                to: user.email,
+                subject: `${verificationOtp} is your new verification code - The Morayo Live Show`,
+                html: `
+                    <div style="font-family: 'Inter', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 40px; border: 1px solid #f0f0f0; border-radius: 16px;">
+                        <div style="text-align: center; margin-bottom: 32px;">
+                            <img src="https://themorayoshow.com/tmas-logo-dark.png" alt="TMAS Logo" style="height: 40px;">
+                        </div>
+                        <h2 style="font-family: 'Fraunces', serif; font-style: italic; color: #1a1a1a; font-size: 24px; text-align: center; margin-bottom: 24px;">New verification code.</h2>
+                        <p style="color: #666; font-size: 16px; line-height: 1.6; text-align: center; margin-bottom: 32px;">
+                            You requested a new verification code. Use the code below to complete your registration.
+                        </p>
+                        <div style="background: #f8f8f6; border-radius: 12px; padding: 24px; text-align: center; margin-bottom: 32px;">
+                            <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #E8593C;">${verificationOtp}</span>
+                        </div>
+                        <p style="color: #999; font-size: 13px; text-align: center;">
+                            This code will expire in 15 minutes.
+                        </p>
+                    </div>
+                `
+            });
+        } catch (emailErr: any) {
+            console.error(">>> [Resend OTP] SMTP Error:", emailErr.message);
+            console.log(`>>> NEW VERIFICATION OTP FOR TESTING: ${verificationOtp}`);
+        }
+
+        res.status(200).json({ success: true, message: 'Verification code resent successfully' });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -682,6 +754,7 @@ router.patch('/user/profile', authenticateUser, async (req: AuthRequest, res) =>
         if (phone) user.phone = phone;
         if (gender) user.gender = gender;
         if (ageRange) user.ageRange = ageRange;
+        if (req.body.country) user.country = req.body.country;
 
         await user.save();
 
@@ -693,10 +766,42 @@ router.patch('/user/profile', authenticateUser, async (req: AuthRequest, res) =>
                 name: user.name,
                 email: user.email,
                 phone: user.phone,
+                country: user.country,
                 gender: user.gender,
                 ageRange: user.ageRange
             }
         });
+    } catch (error: any) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// Delete User Account
+router.delete('/user/account', authenticateUser, async (req: AuthRequest, res) => {
+    try {
+        const userId = req.user!.id;
+        
+        // 1. Find user
+        const user = await UserModel.findById(userId);
+        if (!user) {
+            res.status(404).json({ success: false, message: 'User not found' });
+            return;
+        }
+
+        // 2. Perform cleanup (Optional but recommended)
+        // Delete subscriptions, registrations, etc.
+        const { SubscriptionModel } = require('../models/Subscription');
+        const { EventRegistrationModel } = require('../models/EventRegistration');
+        const { TransactionModel } = require('../models/Transaction');
+        
+        await SubscriptionModel.deleteMany({ userId });
+        await EventRegistrationModel.deleteMany({ userId });
+        await TransactionModel.deleteMany({ userId });
+
+        // 3. Delete user
+        await UserModel.findByIdAndDelete(userId);
+
+        res.status(200).json({ success: true, message: 'Account deleted successfully' });
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message });
     }

@@ -264,4 +264,68 @@ export class SubscriptionService {
                         subscription.currentPeriodEnd > now;
         return isValid;
     }
+
+    public static async getBillingHistory(email: string) {
+        const { TransactionModel } = require('../models/Transaction');
+        const { EventRegistrationModel } = require('../models/EventRegistration');
+        const { EventModel } = require('../models/Event');
+
+        const subscription = await SubscriptionModel.findOne({ email });
+        if (!subscription) return null;
+
+        // 1. Fetch Transactions
+        const transactions = await TransactionModel.find({ email }).sort({ createdAt: -1 });
+
+        // 2. Fetch Event Registrations with Event Titles
+        const registrations = await EventRegistrationModel.find({ email })
+            .populate({ path: 'eventId', model: EventModel, select: 'title date time' })
+            .sort({ createdAt: -1 });
+
+        // 3. Calculate Summary Stats
+        const totalSpent = transactions
+            .filter((t: any) => t.status === 'successful')
+            .reduce((sum: number, t: any) => sum + (t.amount / 100), 0);
+
+        const activePlan = subscription.status === SubscriptionStatus.ACTIVE ? {
+            tier: subscription.tier,
+            renewsAt: subscription.currentPeriodEnd,
+            amount: subscription.tier.includes('NGN') ? 6500 : 5.00, // Hardcoded for demo/display logic
+            currency: subscription.tier.includes('NGN') ? '₦' : '$'
+        } : null;
+
+        const showsAccessed = registrations.length;
+
+        // 4. Combine into a timeline
+        const history = [
+            ...transactions.map((t: any) => ({
+                id: t._id,
+                type: 'subscription',
+                title: `${t.tier.split('_')[0].charAt(0).toUpperCase() + t.tier.split('_')[0].slice(1)} subscription`,
+                date: t.createdAt,
+                amount: t.amount / 100,
+                currency: t.currency === 'NGN' ? '₦' : '$',
+                status: t.status,
+                meta: t.provider
+            })),
+            ...registrations.map((r: any) => ({
+                id: r._id,
+                type: 'show_access',
+                title: r.eventId?.title || 'Show access granted',
+                date: r.createdAt,
+                amount: 0,
+                currency: '',
+                status: 'included',
+                meta: 'auto-registered'
+            }))
+        ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+        return {
+            stats: {
+                totalSpent,
+                activePlan,
+                showsAccessed
+            },
+            history
+        };
+    }
 }

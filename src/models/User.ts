@@ -20,6 +20,11 @@ const userSchema = new Schema<User>({
         required: false,
         trim: true
     },
+    country: {
+        type: String,
+        required: false,
+        trim: true
+    },
     gender: {
         type: String,
         required: false,
@@ -49,11 +54,11 @@ const userSchema = new Schema<User>({
         type: Boolean,
         default: false
     },
-    verificationToken: {
+    verificationOtp: {
         type: String,
         default: null
     },
-    verificationExpiry: {
+    verificationOtpExpiry: {
         type: Date,
         default: null
     },

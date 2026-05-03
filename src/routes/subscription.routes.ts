@@ -5,49 +5,9 @@ import { AuthRequest } from '../types';
 
 const router = Router();
 
-/**
- * @swagger
- * /subscriptions/status:
- *   get:
- *     summary: Retrieve subscriber access parameters
- *     tags: [Subscriptions]
- *     parameters:
- *       - in: query
- *         name: email
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Validated subscription contexts
- *       404:
- *         description: User data unmatched
- */
 router.get('/status', authenticateUser, SubscriptionController.getStatus);
+router.get('/billing-history', authenticateUser, SubscriptionController.getBillingHistory);
 
-/**
- * @swagger
- * /subscriptions/zoom-signature:
- *   post:
- *     summary: Generate Zoom Meeting SDK signature
- *     tags: [Subscriptions]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               meetingNumber:
- *                 type: integer
- *               role:
- *                 type: integer
- *     responses:
- *       200:
- *         description: Signature generated successfully
- */
 router.post('/zoom-signature', authenticateUser, async (req: AuthRequest, res) => {
     try {
         const { meetingId, role } = req.body;
@@ -86,54 +46,8 @@ router.post('/zoom-join-token', authenticateUser, async (req: AuthRequest, res) 
     }
 });
 
-/**
- * @swagger
- * /subscriptions/paystack/initialize:
- *   post:
- *     summary: Initialize a Paystack subscription payment
- *     tags: [Subscriptions]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               email:
- *                 type: string
- *               userId:
- *                 type: string
- *               plan:
- *                 type: string
- *     responses:
- *       200:
- *         description: Paystack initialized
- */
 router.post('/paystack/initialize', authenticateUser, SubscriptionController.initializePaystack);
 
-/**
- * @swagger
- * /subscriptions/stripe/initialize:
- *   post:
- *     summary: Initialize a Stripe subscription payment
- *     tags: [Subscriptions]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               email:
- *                 type: string
- *               userId:
- *                 type: string
- *               plan:
- *                 type: string
- *     responses:
- *       200:
- *         description: Stripe initialized
- */
 router.post('/stripe/initialize', authenticateUser, SubscriptionController.initializeStripe);
 
 // Webhooks

@@ -30,12 +30,25 @@ export class CronService {
 
                 const title = `The Morayo Show Live - ${eventUtcDate.toDateString()}`;
 
+                const settings = await getSystemSettings();
+
+                // Validation boundaries
+                const targetLuxon = DateTime.fromJSDate(targetDay).setZone(EVENT_TIMEZONE);
+                const isWithinRange = targetDay >= settings.reservationOpenDate && targetDay <= settings.reservationCloseDate;
+                const isWorkingDay = settings.workingDays.includes(targetLuxon.weekday);
+                const isBlocked = settings.blockedDates?.some(bd =>
+                    getLagosStartOfDay(bd).getTime() === dayStart.getTime()
+                );
+
+                if (!isWithinRange || !isWorkingDay || isBlocked) {
+                    logger.info(`[CronService] Skipping event creation for ${targetLuxon.toISODate()}: Boundary restriction.`);
+                    continue;
+                }
+
                 // Find or create the event
                 let event = await EventModel.findOne({
                     date: { $gte: dayStart, $lte: dayEnd }
                 });
-
-                const settings = await getSystemSettings();
 
                 if (!event) {
                     const totalSeats = SeatUtils.resolveTotalSeats(settings, dayStart)
