@@ -19,7 +19,12 @@ const PendingBookingSchema = new Schema<IPendingBooking>({
         gender: { type: String, required: true },
         ageRange: { type: String, required: true },
         eventDate: { type: String, required: true },
-        seatLabels: [{ type: String, required: true }]
+        seatLabels: [{ type: String, required: true }],
+        seatNumbers: [{ type: Number }],
+        reservationToken: { type: String },
+        category: { type: String, enum: ['priority', 'general'] },
+        priorityScore: { type: Number },
+        isWaitlist: { type: Boolean }
     },
     createdAt: { type: Date, default: Date.now },
     expiresAt: {
@@ -31,6 +36,6 @@ const PendingBookingSchema = new Schema<IPendingBooking>({
 
 // Compound index for efficient queries
 PendingBookingSchema.index({ email: 1, tempId: 1 });
-// PendingBookingSchema.index({ expiresAt: 1 }); // For cleanup queries
+PendingBookingSchema.index({ "bookingData.eventDate": 1, expiresAt: 1 });
 
 export const PendingBookingModel = mongoose.model<IPendingBooking>('PendingBooking', PendingBookingSchema);

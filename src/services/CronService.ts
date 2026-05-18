@@ -301,10 +301,43 @@ export class CronService {
         }
     }
 
+    public static async processWaitlists(): Promise<void> {
+        try {
+            const settings = await getSystemSettings();
+            if (!settings.prioritySystemEnabled) return;
+
+            const now = DateTime.now().setZone(EVENT_TIMEZONE);
+            // We look for events starting in approx settings.autoAllocationHoursBeforeEvent hours
+            const targetTime = now.plus({ hours: settings.autoAllocationHoursBeforeEvent });
+            
+            // Find events in a 1-hour window around the target time
+            const events = await EventModel.find({
+                date: { 
+                    $gte: targetTime.minus({ minutes: 30 }).toJSDate(), 
+                    $lte: targetTime.plus({ minutes: 30 }).toJSDate() 
+                }
+            });
+
+            if (events.length === 0) return;
+
+            // Import BookingService dynamically to avoid circular dependency
+            const { BookingService } = require('./BookingService');
+            const bookingService = new BookingService();
+
+            for (const event of events) {
+                logger.info(`[CronService] Auto-allocating waitlist for event: ${event.title} (${event.date})`);
+                await bookingService.allocateFromWaitlist(event._id.toString());
+            }
+        } catch (error) {
+            logger.error('[CronService] Waitlist processing failed:', error);
+        }
+    }
+
     public static startBackgroundJobs(): void {
         // Run immediately on startup
         this.createDailyEventsAndZoom();
         this.checkAndCleanupExpiredSubscriptions();
+        this.processWaitlists();
 
         // Then re-run every 12 hours
         setInterval(() => {
@@ -312,6 +345,11 @@ export class CronService {
             this.checkAndCleanupExpiredSubscriptions();
             this.sendExpirationReminders();
         }, 12 * 60 * 60 * 1000);
+
+        // Run waitlist processing every hour
+        setInterval(() => {
+            this.processWaitlists();
+        }, 60 * 60 * 1000);
     }
 
     private static async sendZoomAccessEmail(firstName: string, email: string, localEventTime: string, date: Date,): Promise<void> {

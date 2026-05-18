@@ -94,6 +94,39 @@ export class NotificationService {
     await sendSMS(phone, message);
   }
 
+  async sendWaitlistConfirmationEmail(user: User, booking: Booking): Promise<void> {
+    const emailTemplates = new EmailTemplateBuilder();
+    const html = emailTemplates.generateWaitlistConfirmation(booking);
+
+    await sendEmail({
+      to: user.email,
+      subject: "You're on the Waiting List",
+      html,
+    });
+  }
+
+  async sendBookingRejectionEmail(user: User, eventDate: Date, reason: string): Promise<void> {
+    const emailTemplates = new EmailTemplateBuilder();
+    const html = emailTemplates.generateBookingRejection(user, eventDate, reason);
+
+    await sendEmail({
+      to: user.email,
+      subject: "Booking Capacity Reached",
+      html,
+    });
+  }
+
+  async sendWaitlistApprovedEmail(user: User, booking: Booking): Promise<void> {
+    const emailTemplates = new EmailTemplateBuilder();
+    const html = emailTemplates.generateWaitlistApproved(booking);
+
+    await sendEmail({
+      to: user.email,
+      subject: "Your Booking has been Confirmed!",
+      html,
+    });
+  }
+
   async sendBulkNotification(users: User[], message: string, type: 'sms' | 'email' = 'email'): Promise<void> {
     if (type === 'email') {
       const promises = users.map(user => {

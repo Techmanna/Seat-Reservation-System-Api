@@ -11,6 +11,8 @@ import { SubscriptionDTO } from '../dtos/subscription.dto';
 import { ZoomService } from '../services/ZoomService';
 import { NotificationService } from '../services/NotificationService';
 import { NotificationType } from '../models/Notification';
+import { PaymentService } from '../services/PaymentService';
+import { v4 as uuidv4 } from 'uuid';
 
 const notificationService = new NotificationService();
 
@@ -355,6 +357,90 @@ export class SubscriptionController {
         }
     }
 
+    public static async initializeFlutterwave(req: Request, res: Response): Promise<void> {
+        res.status(400).json({
+            success: false,
+            message: "Flutterwave is not initialized",
+        });
+        return;
+        // try {
+        //     const { email, userId, plan, timezone } = req.body;
+        //     if (!email || !userId || !plan) {
+        //         res.status(400).json({ success: false, message: "Email, userId, and plan are required" });
+        //         return;
+        //     }
+
+        //     let amount = 0;
+        //     let tier = SubscriptionTier.TIER_1_USD;
+        //     let payment_plan = "";
+
+        //     if (plan === 'weekly') {
+        //         amount = 2;
+        //         tier = SubscriptionTier.TIER_1_USD;
+        //         payment_plan = process.env.FLUTTERWAVE_PLAN_TIER_1 || "";
+        //     }
+        //     else if (plan === 'monthly') {
+        //         amount = 5;
+        //         tier = SubscriptionTier.TIER_2_USD;
+        //         payment_plan = process.env.FLUTTERWAVE_PLAN_TIER_2 || "";
+        //     }
+        //     else if (plan === 'annual') {
+        //         amount = 50;
+        //         tier = SubscriptionTier.TIER_3_USD;
+        //         payment_plan = process.env.FLUTTERWAVE_PLAN_TIER_3 || "";
+        //     }
+
+        //     // Guard: reject if user already has an active subscription on the same tier
+        //     const existingSub = await SubscriptionModel.findOne({ email, status: SubscriptionStatus.ACTIVE });
+        //     if (existingSub && existingSub.tier === tier) {
+        //         res.status(409).json({
+        //             success: false,
+        //             message: `You already have an active ${plan} subscription. To change plans, select a different tier.`
+        //         });
+        //         return;
+        //     }
+
+        //     const tx_ref = `flw_${uuidv4()}`;
+
+        //     const flutterwavePayload = {
+        //         tx_ref,
+        //         amount,
+        //         currency: 'USD',
+        //         payment_plan,
+        //         redirect_url: `${process.env.FRONTEND_URL || 'http://localhost:5177'}/member`,
+        //         customer: {
+        //             email,
+        //             name: 'Subscriber',
+        //         },
+        //         meta: {
+        //             userId,
+        //             email,
+        //             tier,
+        //             timezone: timezone || 'Africa/Lagos'
+        //         },
+        //         customizations: {
+        //             title: "The Morayo Show Subscription",
+        //             description: `${plan.charAt(0).toUpperCase() + plan.slice(1)} access to live shows`,
+        //             logo: "https://themorayoshow.com/wp-content/uploads/2025/12/MAFB-SHOW-LOGO-i-1-scaled.png"
+        //         }
+        //     };
+
+        //     const flutterwaveResponse = await PaymentService.initializeFlutterwavePayment(flutterwavePayload);
+
+        //     res.status(200).json({
+        //         success: true,
+        //         message: "Flutterwave initialized",
+        //         data: {
+        //             authorizationUrl: flutterwaveResponse.link,
+        //             tx_ref
+        //         }
+        //     });
+        // } catch (error: any) {
+        //     console.error("Flutterwave Init Error:", error.message);
+        //     res.status(500).json({ success: false, message: "Payment initialization failed" });
+        // }
+    }
+
     public static async handlePaystackWebhook(req: Request, res: Response): Promise<void> {
         try {
             const event = req.body;
@@ -452,9 +538,9 @@ export class SubscriptionController {
                 return;
             }
 
-            const subscription = await SubscriptionModel.findOne({ 
-                email, 
-                status: SubscriptionStatus.ACTIVE 
+            const subscription = await SubscriptionModel.findOne({
+                email,
+                status: SubscriptionStatus.ACTIVE
             });
 
             if (!subscription || !subscription.providerSubscriptionId) {
@@ -485,7 +571,7 @@ export class SubscriptionController {
             }
 
             const subscription = await SubscriptionModel.findOne({ email });
-            
+
             // If they have an existing provider, we prefer to stay with it for the upgrade
             const provider = subscription?.provider || (newPlan.includes('USD') ? PaymentProvider.STRIPE : PaymentProvider.PAYSTACK);
 
@@ -508,17 +594,20 @@ export class SubscriptionController {
     public static async getBillingHistory(req: Request, res: Response): Promise<void> {
         try {
             const email = (req as any).user?.email;
+            const page = parseInt(req.query.page as string) || 1;
+            const limit = parseInt(req.query.limit as string) || 10;
+
             if (!email) {
                 res.status(401).json({ success: false, message: "Unauthorized" });
                 return;
             }
 
-            const history = await SubscriptionService.getBillingHistory(email);
+            const result = await SubscriptionService.getBillingHistory(email, page, limit);
 
             res.status(200).json({
                 success: true,
                 message: "Billing history fetched successfully",
-                data: history
+                data: result
             });
         } catch (error: any) {
             res.status(500).json({ success: false, message: error.message });

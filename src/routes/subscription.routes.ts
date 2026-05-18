@@ -49,6 +49,7 @@ router.post('/zoom-join-token', authenticateUser, async (req: AuthRequest, res) 
 router.post('/paystack/initialize', authenticateUser, SubscriptionController.initializePaystack);
 
 router.post('/stripe/initialize', authenticateUser, SubscriptionController.initializeStripe);
+router.post('/flutterwave/initialize', authenticateUser, SubscriptionController.initializeFlutterwave);
 
 // Webhooks
 router.post('/paystack/webhook', SubscriptionController.handlePaystackWebhook);

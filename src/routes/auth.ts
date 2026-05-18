@@ -640,11 +640,20 @@ router.post('/user/forgot-password', async (req, res) => {
                 to: user.email,
                 subject: 'Reset your password - The Morayo Live Show',
                 html: `
-                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                        <h2>Password Reset Request</h2>
-                        <p>You requested a password reset. Please click the button below to set a new password:</p>
-                        <a href="${resetLink}" style="background: #007bff; color: white; padding: 10px 20px; border-radius: 5px; text-decoration: none; display: inline-block;">Reset Password</a>
-                        <p>If you did not initiate this request, you can safely ignore this email.</p>
+                    <div style="font-family: 'Inter', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 40px; border: 1px solid #f0f0f0; border-radius: 16px;">
+                        <div style="text-align: center; margin-bottom: 32px;">
+                            <img src="https://themorayoshow.com/tmas-logo-dark.png" alt="TMAS Logo" style="height: 40px;">
+                        </div>
+                        <h2 style="font-family: 'Fraunces', serif; font-style: italic; color: #1a1a1a; font-size: 24px; text-align: center; margin-bottom: 24px;">Reset access.</h2>
+                        <p style="color: #666; font-size: 16px; line-height: 1.6; text-align: center; margin-bottom: 32px;">
+                            You requested a password reset. Click the button below to set a new password and recover your account.
+                        </p>
+                        <div style="text-align: center; margin-bottom: 32px;">
+                            <a href="${resetLink}" style="background: #E8593C; color: white; padding: 16px 32px; border-radius: 12px; text-decoration: none; display: inline-block; font-weight: bold; font-size: 16px;">Reset Password</a>
+                        </div>
+                        <p style="color: #999; font-size: 13px; text-align: center;">
+                            If you did not initiate this request, you can safely ignore this email.
+                        </p>
                     </div>
                 `
             });

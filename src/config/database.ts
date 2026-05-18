@@ -32,11 +32,11 @@ const runSeeders = async (): Promise<void> => {
         
         // Run admin seeder
         const adminResult = await seedAdmins();
-        logger.info("Admin seeder result:", adminResult);
+        logger.info("Admin seeder result: " + JSON.stringify(adminResult));
         
         // Run system settings seeder
         const settingsResult = await seedSystemSettings();
-        logger.info("System settings seeder result:", settingsResult);
+        logger.info("System settings seeder result: " + JSON.stringify(settingsResult));
         
         logger.info("Database seeding completed successfully");
     } catch (error) {

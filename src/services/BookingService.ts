@@ -24,6 +24,7 @@ import { getSystemSettings } from "./SettingsService";
 import config from "../config/environment";
 import * as crypto from "crypto";
 import { buildEventUtcDate, EVENT_HOUR_WAT, EVENT_MINUTE_WAT, getEventEndTime, getEventStartTime, getLagosEndOfDay, getLagosStartOfDay } from "../utils/formatDate";
+import { PriorityService } from "./PriorityService";
 
 interface BookingRequestWithSeats extends Omit<BookingRequest, "seatNumbers"> {
   seatLabels: string[];
@@ -32,11 +33,13 @@ interface BookingRequestWithSeats extends Omit<BookingRequest, "seatNumbers"> {
 export class BookingService {
   private notificationService: NotificationService;
   private qrService: QRService;
+  private priorityService: PriorityService;
   private pendingBookings: Map<string, PendingBooking> = new Map();
 
   constructor() {
     this.notificationService = new NotificationService();
     this.qrService = new QRService();
+    this.priorityService = new PriorityService();
 
     // Clean up expired pending bookings every 10 minutes
     setInterval(() => this.cleanupExpiredBookings(), 10 * 60 * 1000);
@@ -226,7 +229,7 @@ export class BookingService {
 
       // Check if requested seats are available in both confirmed and pending bookings
       const bookedSeats = await BookingModel.find({
-        eventId: event._id?.toString(),
+        event: event._id?.toString(),
         status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
       }).select("seatNumbers seatLabels");
 
@@ -250,6 +253,94 @@ export class BookingService {
       const allPendingSeatLabels = pendingBookings.flatMap(
         (pending) => pending.bookingData.seatLabels || []
       );
+
+      // PRIORITY SYSTEM LOGIC
+      let category: "priority" | "general" = "general";
+      let isWaitlist = false;
+      let priorityScore = 0;
+
+      if (settings.prioritySystemEnabled) {
+        const priorityResult = await this.priorityService.calculatePriority(
+          bookingData.email,
+          settings
+        );
+        priorityScore = priorityResult.score;
+
+        const totalCapacity = event.totalSeats;
+        const priorityCapacity = Math.floor(
+          (totalCapacity * settings.priorityAllocationPercentage) / 100
+        );
+        const generalCapacity = totalCapacity - priorityCapacity;
+
+        const confirmedBookings = await BookingModel.find({
+          event: event._id,
+          status: {
+            $nin: [
+              BookingStatus.Cancelled,
+              BookingStatus.Voided,
+              BookingStatus.Waitlisted,
+            ],
+          },
+        }).select("category");
+
+        const priorityTaken = confirmedBookings.filter(
+          (b) => b.category === "priority"
+        ).length;
+        const generalTaken = confirmedBookings.filter(
+          (b) => b.category === "general"
+        ).length;
+
+        if (priorityResult.isPriority) {
+          // Priority User Logic
+          if (priorityTaken < priorityCapacity) {
+            category = "priority";
+          } else if (generalTaken < generalCapacity) {
+            category = "general";
+          } else {
+            // All seats full, but priority users are confirmed immediately?
+            // The requirement says "Priority users should be confirmed immediately."
+            // but if there are 0 physical seats, they must waitlist too.
+            // However, we give them priority category.
+            isWaitlist = true;
+            category = "priority";
+          }
+        } else {
+          // General User Logic
+          if (generalTaken < generalCapacity) {
+            category = "general";
+          } else {
+            // General pool full
+            isWaitlist = true;
+            category = "general";
+
+            // Check waitlist capacity
+            const currentWaitlistedCount = await BookingModel.countDocuments({
+              event: event._id,
+              status: BookingStatus.Waitlisted,
+            });
+
+            if (currentWaitlistedCount >= settings.waitingListCapacity) {
+              // Send rejection email if waitlist is full
+              try {
+                await this.notificationService.sendBookingRejectionEmail(
+                  { email: bookingData.email, name: bookingData.name } as any,
+                  eventDate,
+                  "Event and waiting list are both full."
+                );
+              } catch (err) {
+                logger.error("Failed to send rejection email:", err);
+              }
+
+              return {
+                success: false,
+                message:
+                  "We're sorry, this event has reached full capacity and the waiting list is also full.",
+                error: "Waitlist full",
+              };
+            }
+          }
+        }
+      }
 
       const conflictingNumbers = seatNumbers.filter(
         (seat) =>
@@ -283,6 +374,9 @@ export class BookingService {
         ...bookingData,
         eventDate,
         reservationToken,
+        category,
+        priorityScore,
+        isWaitlist,
       };
 
       // Check if user exists to determine if OTP is required
@@ -523,7 +617,7 @@ export class BookingService {
 
       // Check seat availability again
       const bookedSeats = await BookingModel.find({
-        eventId: event._id?.toString(),
+        event: event._id?.toString(),
         status: { $ne: BookingStatus.Cancelled },
       }).select("seatNumbers seatLabels");
 
@@ -578,7 +672,11 @@ export class BookingService {
         eventDate: eventDate,
         seatNumbers,
         seatLabels,
-        status: BookingStatus.Attending,
+        status: bookingData.isWaitlist
+          ? BookingStatus.Waitlisted
+          : BookingStatus.Attending,
+        category: bookingData.category,
+        priorityScore: bookingData.priorityScore,
         reservationToken: bookingData.reservationToken,
         qrCode: "",
         calendarLink: this.generateGoogleCalendarLink(
@@ -595,21 +693,36 @@ export class BookingService {
       await booking.save();
 
       // Update event available seats
-      event.availableSeats -= seatNumbers.length;
-      await event.save();
+      if (!bookingData.isWaitlist) {
+        event.availableSeats -= seatNumbers.length;
+        await event.save();
+      }
 
       // Send notifications
       try {
-        const promises: Promise<any>[] = [
-          this.notificationService.sendBookingConfirmationEmail(
-            user,
-            booking,
-            event
-          )
-        ];
+        const promises: Promise<any>[] = [];
 
-        if (user.phone) {
-          promises.push(this.notificationService.sendTicketSMS(user.phone, ticketId));
+        if (bookingData.isWaitlist) {
+          promises.push(
+            this.notificationService.sendWaitlistConfirmationEmail(
+              user,
+              booking
+            )
+          );
+        } else {
+          promises.push(
+            this.notificationService.sendBookingConfirmationEmail(
+              user,
+              booking,
+              event
+            )
+          );
+
+          if (user.phone) {
+            promises.push(
+              this.notificationService.sendTicketSMS(user.phone, ticketId)
+            );
+          }
         }
 
         await Promise.all(promises);
@@ -619,8 +732,9 @@ export class BookingService {
 
       return {
         success: true,
-        message:
-          "Booking completed successfully! Check your email for confirmation.",
+        message: bookingData.isWaitlist
+          ? "You have been added to the waiting list! Check your email for details."
+          : "Booking completed successfully! Check your email for confirmation.",
         data: booking,
       };
     } catch (error: any) {
@@ -660,6 +774,186 @@ export class BookingService {
     )}&dates=${eventData.start}/${eventData.end}&details=${encodeURIComponent(
       eventData.description
     )}&location=${encodeURIComponent(eventData.location)}`;
+  }
+
+  /**
+   * Automatically allocate unused priority seats to waitlisted users
+   */
+  public async allocateFromWaitlist(eventId: string): Promise<void> {
+    try {
+      const event = await EventModel.findById(eventId);
+      if (!event) return;
+
+      const settings = await getSystemSettings();
+      if (!settings.prioritySystemEnabled) return;
+
+      // Calculate capacity
+      const totalCapacity = event.totalSeats;
+      const priorityCapacity = Math.floor(
+        (totalCapacity * settings.priorityAllocationPercentage) / 100
+      );
+
+      // Count existing confirmed priority bookings
+      const priorityTaken = await BookingModel.countDocuments({
+        event: eventId,
+        status: {
+          $nin: [
+            BookingStatus.Cancelled,
+            BookingStatus.Voided,
+            BookingStatus.Waitlisted,
+          ],
+        },
+        category: "priority",
+      });
+
+      let remainingPrioritySlots = priorityCapacity - priorityTaken;
+      if (remainingPrioritySlots <= 0) {
+        logger.info(`No remaining priority slots for event ${eventId}`);
+        return;
+      }
+
+      // Get waitlisted bookings sorted by priority score and date
+      const waitlist = await BookingModel.find({
+        event: eventId,
+        status: BookingStatus.Waitlisted,
+      })
+        .sort({ priorityScore: -1, createdAt: 1 })
+        .populate("user");
+
+      for (const booking of waitlist) {
+        if (remainingPrioritySlots <= 0) break;
+
+        // Find current available seats for this specific event
+        const bookedSeats = await BookingModel.find({
+          event: eventId,
+          status: {
+            $nin: [
+              BookingStatus.Cancelled,
+              BookingStatus.Voided,
+              BookingStatus.Waitlisted,
+            ],
+          },
+        }).select("seatNumbers");
+        const allBookedNumbers = bookedSeats.flatMap((b) => b.seatNumbers);
+
+        try {
+          const newSeats = SeatUtils.findNextAvailableSeats(
+            event.totalSeats,
+            allBookedNumbers,
+            booking.seatNumbers.length
+          );
+
+          booking.status = BookingStatus.Attending;
+          booking.seatNumbers = newSeats.numbers;
+          booking.seatLabels = newSeats.labels;
+          booking.category = "priority"; // Assign to priority pool
+
+          // Generate new QR code since seat changed
+          booking.qrCode = await this.qrService.generateQRCode(booking);
+          await booking.save();
+
+          event.availableSeats -= booking.seatNumbers.length;
+          await event.save();
+
+          remainingPrioritySlots--;
+
+          // Notify user
+          await this.notificationService.sendWaitlistApprovedEmail(
+            booking.user as any,
+            booking
+          );
+
+          logger.info(
+            `Waitlisted booking ${
+              booking.ticketId
+            } approved and allocated to seats ${booking.seatLabels.join(", ")}`
+          );
+        } catch (error) {
+          logger.error(
+            `Failed to allocate seats for waitlisted booking ${booking.ticketId}:`,
+            error
+          );
+        }
+      }
+    } catch (error) {
+      logger.error("Error in allocateFromWaitlist:", error);
+    }
+  }
+
+  /**
+   * Manually approve a waitlisted booking
+   */
+  public async approveWaitlistedBooking(
+    ticketId: string
+  ): Promise<ApiResponse<Booking>> {
+    try {
+      const booking = await BookingModel.findOne({
+        ticketId,
+        status: BookingStatus.Waitlisted,
+      }).populate("user event");
+
+      if (!booking) {
+        return {
+          success: false,
+          message: "Waitlisted booking not found",
+          error: "Not found",
+        };
+      }
+
+      const event = booking.event as any;
+      const bookedSeats = await BookingModel.find({
+        event: event._id,
+        status: {
+          $nin: [
+            BookingStatus.Cancelled,
+            BookingStatus.Voided,
+            BookingStatus.Waitlisted,
+          ],
+        },
+      }).select("seatNumbers");
+      const allBookedNumbers = bookedSeats.flatMap((b) => b.seatNumbers);
+
+      try {
+        const newSeats = SeatUtils.findNextAvailableSeats(
+          event.totalSeats,
+          allBookedNumbers,
+          booking.seatNumbers.length
+        );
+
+        booking.status = BookingStatus.Attending;
+        booking.seatNumbers = newSeats.numbers;
+        booking.seatLabels = newSeats.labels;
+        booking.qrCode = await this.qrService.generateQRCode(booking);
+        await booking.save();
+
+        event.availableSeats -= booking.seatNumbers.length;
+        await event.save();
+
+        await this.notificationService.sendWaitlistApprovedEmail(
+          booking.user as any,
+          booking
+        );
+
+        return {
+          success: true,
+          message: "Booking approved successfully",
+          data: booking,
+        };
+      } catch (error: any) {
+        return {
+          success: false,
+          message: error.message,
+          error: "No seats available",
+        };
+      }
+    } catch (error: any) {
+      logger.error("Approve waitlist error:", error);
+      return {
+        success: false,
+        message: "Failed to approve booking",
+        error: error.message,
+      };
+    }
   }
 
   async resendOTP(email: string): Promise<ApiResponse<{ expiresAt: Date }>> {

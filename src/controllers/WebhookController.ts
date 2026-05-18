@@ -2,6 +2,9 @@ import { Request, Response } from 'express';
 import { SubscriptionService } from '../services/SubscriptionService';
 import { SubscriptionTier, PaymentProvider } from '../types/subscription.type';
 import crypto from 'crypto';
+import { logger } from '../utils/logger';
+import { PaymentService } from '../services/PaymentService';
+import { TransactionModel } from '../models/Transaction';
 
 export class WebhookController {
     public static async handlePaystack(req: Request, res: Response): Promise<void> {
@@ -25,7 +28,7 @@ export class WebhookController {
                 const email = data.customer.email;
                 const userId = data.metadata?.userId || data.customer.id;
                 const timezone = data.metadata?.timezone || 'Africa/Lagos';
-                
+
                 // Determine tier from amount
                 let tier = SubscriptionTier.TIER_1_NGN;
                 if (data.amount === 650000) tier = SubscriptionTier.TIER_2_NGN;
@@ -105,34 +108,74 @@ export class WebhookController {
     public static async handleFlutterwave(req: Request, res: Response): Promise<void> {
         try {
             const secretHash = process.env.FLUTTERWAVE_WEBHOOK_HASH;
-            const signature = req.headers['verif-hash'];
+            const signature = req.headers['flutterwave-signature'] as string;
 
-            if (!signature || signature !== secretHash) {
-                res.status(401).json({ success: false, message: "Invalid signature" });
-                return;
+            // 1. Verify Webhook Signature (HMAC-SHA256)
+            if (secretHash && signature) {
+                const hash = crypto
+                    .createHmac('sha256', secretHash)
+                    .update((req as any).rawBody || JSON.stringify(req.body))
+                    .digest('hex');
+
+                // If you are using verif-hash (legacy), it's a direct string comparison.
+                const verifHash = req.headers['verif-hash'];
+
+                if (signature !== hash && verifHash !== secretHash) {
+                    logger.error("[WebhookController] Flutterwave invalid signature");
+                    res.status(401).send('Invalid signature');
+                    return;
+                }
             }
 
-            const { event, data } = req.body;
-            console.log("[Flutterwave Webhook]", { event });
+            const body = req.body;
+            const event = body.type || body.event || body['event.type'];
+            const data = body.data || body;
 
-            if (event === 'charge.completed' && data.status === 'successful') {
-                const email = data.customer.email;
-                // Try to get userId from meta, fallback to customer.id
-                const userId = data.meta?.userId || data.customer.id;
-                const timezone = data.meta?.timezone || 'Africa/Lagos';
-                
-                // Determine tier from amount (assuming USD for international)
-                // amounts are usually in basic units (not cents) in Flutterwave? 
-                // Actually, Flutterwave amounts are usually like 5.00 for $5.
-                let tier = SubscriptionTier.TIER_1_USD;
-                if (data.amount === 5) tier = SubscriptionTier.TIER_2_USD;
-                if (data.amount === 50) tier = SubscriptionTier.TIER_3_USD;
+            logger.info(`[Flutterwave Webhook] Event: ${event}`);
 
-                // If NGN was used, we could map those too
-                if (data.currency === 'NGN') {
-                    tier = SubscriptionTier.TIER_1_NGN;
-                    if (data.amount === 6500) tier = SubscriptionTier.TIER_2_NGN;
-                    if (data.amount === 70000) tier = SubscriptionTier.TIER_3_NGN;
+            if ((event === 'charge.completed' || event === 'CARD_TRANSACTION') && (data.status === 'successful' || data.status === 'succeeded')) {
+                const transactionId = data.id?.toString();
+                if (!transactionId) {
+                    res.status(200).send('No transaction ID');
+                    return;
+                }
+
+                // 2. Best Practice: Re-query Flutterwave API to verify transaction details
+                const verifiedData = await PaymentService.verifyFlutterwaveTransaction(transactionId);
+
+                if (verifiedData.status !== 'successful' && verifiedData.status !== 'succeeded') {
+                    logger.error(`[WebhookController] Flutterwave transaction ${transactionId} verification failed`);
+                    res.status(200).send('Transaction not successful');
+                    return;
+                }
+
+                const email = verifiedData.meta?.email || verifiedData.customer?.email;
+                const amount = verifiedData.amount;
+                const currency = verifiedData.currency;
+                const txRef = verifiedData.tx_ref || verifiedData.txRef;
+
+                // 3. Idempotency: Check if transaction already processed
+                const existingTx = await TransactionModel.findOne({ providerTransactionId: transactionId });
+                if (existingTx && existingTx.status === 'successful') {
+                    logger.info(`[WebhookController] Flutterwave transaction ${transactionId} already processed.`);
+                    res.status(200).send('Already processed');
+                    return;
+                }
+
+                // Extract user context from meta
+                const userId = verifiedData.meta?.userId || verifiedData.customer?.id?.toString() || 'flw_user';
+                const timezone = verifiedData.meta?.timezone || 'Africa/Lagos';
+
+                // Determine tier
+                let tier = verifiedData.meta?.tier as SubscriptionTier || SubscriptionTier.TIER_1_USD;
+                if (!verifiedData.meta?.tier) {
+                    if (amount === 5) tier = SubscriptionTier.TIER_2_USD;
+                    else if (amount === 50) tier = SubscriptionTier.TIER_3_USD;
+                    else if (currency === 'NGN') {
+                        tier = SubscriptionTier.TIER_1_NGN;
+                        if (amount === 6500) tier = SubscriptionTier.TIER_2_NGN;
+                        if (amount === 70000) tier = SubscriptionTier.TIER_3_NGN;
+                    }
                 }
 
                 await SubscriptionService.activateSubscription(
@@ -140,18 +183,23 @@ export class WebhookController {
                     email,
                     tier,
                     PaymentProvider.FLUTTERWAVE,
-                    data.tx_ref, // Using tx_ref as providerId for verification later if needed
-                    data.id.toString(),
+                    verifiedData.payment_plan?.toString() || verifiedData.subscription_id?.toString() || txRef,
+                    transactionId, // Unique Transaction Token
+                    verifiedData.customer?.id?.toString(),
                     timezone,
-                    data.amount,
-                    data.currency
+                    amount,
+                    currency
                 );
+            }
+
+            if (event === 'subscription.cancelled') {
+                await SubscriptionService.cancelSubscription(data.id.toString());
             }
 
             res.status(200).send('Webhook Handled');
         } catch (error: any) {
-            console.error("[WebhookController] Flutterwave error:", error.message);
-            res.status(500).send('Webhook Error');
+            logger.error("[WebhookController] Flutterwave error:", error.message);
+            res.status(200).send('Webhook Error');
         }
     }
 }

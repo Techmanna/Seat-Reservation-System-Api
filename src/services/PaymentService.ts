@@ -84,6 +84,8 @@ export class PaymentService {
         currency: string;
         redirect_url: string;
         customer: { email: string; name: string; phone?: string };
+        meta?: any;
+        payment_plan?: string;
         customizations?: { title: string; description: string; logo?: string };
     }): Promise<any> {
         try {

@@ -8,6 +8,8 @@ import { DateTime } from 'luxon';
 import { logger } from '../utils/logger';
 import { NotificationService } from './NotificationService';
 import { NotificationType } from '../models/Notification';
+import { TransactionModel } from '../models/Transaction';
+import { EventRegistrationModel } from '../models/EventRegistration';
 
 const notificationService = new NotificationService();
 
@@ -265,11 +267,7 @@ export class SubscriptionService {
         return isValid;
     }
 
-    public static async getBillingHistory(email: string) {
-        const { TransactionModel } = require('../models/Transaction');
-        const { EventRegistrationModel } = require('../models/EventRegistration');
-        const { EventModel } = require('../models/Event');
-
+    public static async getBillingHistory(email: string, page: number = 1, limit: number = 10) {
         const subscription = await SubscriptionModel.findOne({ email });
         if (!subscription) return null;
 
@@ -286,23 +284,32 @@ export class SubscriptionService {
             .filter((t: any) => t.status === 'successful')
             .reduce((sum: number, t: any) => sum + (t.amount / 100), 0);
 
+        const tierAmounts: Record<string, number> = {
+            [SubscriptionTier.TIER_1_NGN]: 2500,
+            [SubscriptionTier.TIER_2_NGN]: 6500,
+            [SubscriptionTier.TIER_3_NGN]: 70000,
+            [SubscriptionTier.TIER_1_USD]: 2,
+            [SubscriptionTier.TIER_2_USD]: 5,
+            [SubscriptionTier.TIER_3_USD]: 50,
+        };
+
         const activePlan = subscription.status === SubscriptionStatus.ACTIVE ? {
             tier: subscription.tier,
             renewsAt: subscription.currentPeriodEnd,
-            amount: subscription.tier.includes('NGN') ? 6500 : 5.00, // Hardcoded for demo/display logic
+            amount: tierAmounts[subscription.tier] || 0,
             currency: subscription.tier.includes('NGN') ? '₦' : '$'
         } : null;
 
         const showsAccessed = registrations.length;
 
-        // 4. Combine into a timeline
-        const history = [
+        // 4. Combine into a timeline and paginate
+        const allHistory = [
             ...transactions.map((t: any) => ({
                 id: t._id,
                 type: 'subscription',
                 title: `${t.tier.split('_')[0].charAt(0).toUpperCase() + t.tier.split('_')[0].slice(1)} subscription`,
                 date: t.createdAt,
-                amount: t.amount / 100,
+                amount: t.amount,
                 currency: t.currency === 'NGN' ? '₦' : '$',
                 status: t.status,
                 meta: t.provider
@@ -319,13 +326,24 @@ export class SubscriptionService {
             }))
         ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
+        const totalItems = allHistory.length;
+        const totalPages = Math.ceil(totalItems / limit);
+        const startIndex = (page - 1) * limit;
+        const history = allHistory.slice(startIndex, startIndex + limit);
+
         return {
             stats: {
                 totalSpent,
                 activePlan,
                 showsAccessed
             },
-            history
+            history,
+            pagination: {
+                totalItems,
+                totalPages,
+                currentPage: page,
+                limit
+            }
         };
     }
 }

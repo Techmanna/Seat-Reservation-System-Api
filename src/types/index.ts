@@ -44,6 +44,7 @@ export enum BookingStatus {
     Cancelled = 'cancelled',
     Attended = 'attended',
     Voided = 'voided',
+    Waitlisted = 'waitlisted',
 }
 
 export interface Booking {
@@ -62,6 +63,8 @@ export interface Booking {
     cancelledAt?:Date;
     calendarLink?: string;
     attendedAt?: Date;
+    category?: 'priority' | 'general';
+    priorityScore?: number;
 }
 
 // export interface Admin {
@@ -117,6 +120,19 @@ export interface SystemSettings {
     updatedAt?: Date;
     blockedDates?: Date[];
     minCancellationHours?: number;
+    prioritySystemEnabled: boolean;
+    priorityAllocationPercentage: number;
+    waitingListCapacity: number;
+    autoAllocationHoursBeforeEvent: number;
+    priorityRules: {
+        newUser: boolean;
+        lowFrequency: boolean;
+        inactivity: boolean;
+        neverBooked: boolean;
+    };
+    lowFrequencyThreshold: number;
+    lowFrequencyPeriodDays: number;
+    inactivityPeriodDays: number;
 }
 
 export interface BookingRequest {
@@ -129,6 +145,9 @@ export interface BookingRequest {
     ageRange: '18-25' | '26-35' | '36-45' | '46-55' | '55+';
     seatLabels: string[];
     reservationToken: string;
+    category?: 'priority' | 'general';
+    priorityScore?: number;
+    isWaitlist?: boolean;
 }
 
 export interface ApiResponse<T> {

@@ -105,4 +105,27 @@ export class SeatUtils {
 
     return override?.totalSeats || settings.defaultTotalSeats;
   }
+
+  /**
+   * Find the next available seats for a booking
+   */
+  static findNextAvailableSeats(
+    totalSeats: number,
+    bookedSeatNumbers: number[],
+    count: number
+  ): { numbers: number[]; labels: string[] } {
+    const available = this.getAvailableSeats(totalSeats, bookedSeatNumbers);
+
+    if (available.length < count) {
+      throw new Error(
+        `Not enough seats available. Requested: ${count}, Available: ${available.length}`
+      );
+    }
+
+    const selected = available.slice(0, count);
+    return {
+      numbers: selected.map((s) => s.number),
+      labels: selected.map((s) => s.label),
+    };
+  }
 }

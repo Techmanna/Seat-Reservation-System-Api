@@ -103,10 +103,15 @@ app.disable('x-powered-by');
 
 app.use('/api/', limiter);
 app.use((req, res, next) => {
-  if (req.originalUrl === '/api/subscriptions/stripe/webhook') {
+  if (req.originalUrl === '/api/subscriptions/stripe/webhook' || req.originalUrl === '/api/webhooks/stripe') {
     express.raw({ type: 'application/json' })(req, res, next);
   } else {
-    express.json({ limit: '10mb' })(req, res, next);
+    express.json({ 
+      limit: '10mb',
+      verify: (req: any, res, buf) => {
+        req.rawBody = buf.toString();
+      }
+    })(req, res, next);
   }
 });
 app.use(express.urlencoded({ extended: true }));
