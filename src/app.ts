@@ -96,7 +96,8 @@ app.use(helmet());
 const envOrigins = process.env.ALLOWED_ORIGINS;
 const ALLOWED_ORIGINS = !envOrigins || envOrigins === '*' ? '*' : envOrigins.split(',');
 app.use(cors({
-  origin: ALLOWED_ORIGINS,
+  // origin: ALLOWED_ORIGINS,
+  origin: true,
   credentials: true
 }));
 app.disable('x-powered-by');
