@@ -30,6 +30,37 @@ const eventService = new EventService();
  *       200:
  *         description: Yields complete business logic states
  */
+router.get("/revenue/export", async (req, res) => {
+  try {
+    // Note: Population assumes the 'user' field exists and references the User collection
+    const subscriptions = await SubscriptionModel.find().lean().populate('user');
+    
+    const exportData = subscriptions.map((sub: any) => ({
+      email: sub.email || (sub.user ? sub.user.email : ""),
+      plan: sub.plan || "",
+      status: sub.status || "",
+      provider: sub.provider || "",
+      providerSubscriptionId: sub.providerSubscriptionId || "",
+      currentPeriodStart: sub.currentPeriodStart ? new Date(sub.currentPeriodStart).toISOString() : "",
+      currentPeriodEnd: sub.currentPeriodEnd ? new Date(sub.currentPeriodEnd).toISOString() : "",
+      createdAt: sub.createdAt ? new Date(sub.createdAt).toISOString() : ""
+    }));
+
+    res.json({
+      success: true,
+      message: "Transactions exported successfully",
+      data: exportData
+    });
+  } catch (error: any) {
+    console.error("Export transactions error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to export transactions",
+      error: error.message
+    });
+  }
+});
+
 router.get("/revenue", async (req, res) => {
   try {
     const today = new Date();
@@ -1281,44 +1312,46 @@ router.post("/registrations/bulk-action", async (req, res) => {
       return;
     }
 
-    let updateData = {};
-    let message = "";
-
-    switch (action) {
-      case "void":
-        updateData = { status: BookingStatus.Voided };
-        message = `${registrationIds.length} registrations voided successfully`;
-        break;
-      case "confirm":
-        updateData = { status: BookingStatus.Attending };
-        message = `${registrationIds.length} registrations confirmed successfully`;
-        break;
-      case "checkin":
-        updateData = { status: BookingStatus.Attended };
-        message = `${registrationIds.length} registrations checked-in successfully`;
-        break;
-      default:
-        res.status(400).json({
-          success: false,
-          message: "Invalid bulk action",
-        });
-        return;
+    let modifiedCount = 0;
+    
+    for (const id of registrationIds) {
+      const registration = await BookingModel.findById(id);
+      if (!registration) continue;
+      
+      const isVoidOrCancelled = registration.status === BookingStatus.Voided || registration.status === BookingStatus.Cancelled;
+      const seatCount = registration.seatNumbers ? registration.seatNumbers.length : 0;
+      
+      if (action === "void" && !isVoidOrCancelled) {
+         await BookingModel.findByIdAndUpdate(id, { status: BookingStatus.Voided });
+         if (seatCount > 0) {
+            await EventModel.findByIdAndUpdate(registration.event, {
+              $inc: { availableSeats: seatCount },
+            });
+         }
+         modifiedCount++;
+      } else if (action === "delete") {
+         if (!isVoidOrCancelled && seatCount > 0) {
+            await EventModel.findByIdAndUpdate(registration.event, {
+              $inc: { availableSeats: seatCount },
+            });
+         }
+         await BookingModel.findByIdAndDelete(id);
+         modifiedCount++;
+      } else if (action === "confirm" && registration.status !== BookingStatus.Attending) {
+         await BookingModel.findByIdAndUpdate(id, { status: BookingStatus.Attending });
+         modifiedCount++;
+      } else if (action === "checkin" && registration.status !== BookingStatus.Attended) {
+         await BookingModel.findByIdAndUpdate(id, { status: BookingStatus.Attended, attendedAt: new Date() });
+         modifiedCount++;
+      }
     }
-
-    const result = await BookingModel.updateMany(
-      {
-        _id: { $in: registrationIds },
-        status: { $ne: BookingStatus.Voided }, // Don't update already voided registrations
-      },
-      updateData
-    );
 
     res.json({
       success: true,
-      message,
+      message: `${modifiedCount} registrations processed successfully`,
       data: {
-        modifiedCount: result.modifiedCount,
-        matchedCount: result.matchedCount,
+        modifiedCount,
+        matchedCount: registrationIds.length,
       },
     });
   } catch (error: any) {
@@ -1328,6 +1361,78 @@ router.post("/registrations/bulk-action", async (req, res) => {
       message: "Failed to perform bulk action",
       error: error.message,
     });
+  }
+});
+
+// Bulk delete by date range
+router.post("/registrations/bulk-delete-by-date", async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+    
+    if (!startDate || !endDate) {
+      res.status(400).json({ success: false, message: "Start date and end date are required" });
+      return;
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+    
+    const bookings = await BookingModel.find({
+      eventDate: { $gte: start, $lte: end }
+    });
+
+    let modifiedCount = 0;
+
+    for (const registration of bookings) {
+      const isVoidOrCancelled = registration.status === BookingStatus.Voided || registration.status === BookingStatus.Cancelled;
+      const seatCount = registration.seatNumbers ? registration.seatNumbers.length : 0;
+      
+      if (!isVoidOrCancelled && seatCount > 0) {
+        await EventModel.findByIdAndUpdate(registration.event, {
+          $inc: { availableSeats: seatCount },
+        });
+      }
+      
+      await BookingModel.findByIdAndDelete(registration._id);
+      modifiedCount++;
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully deleted ${modifiedCount} bookings within the specified date range`,
+      data: { modifiedCount }
+    });
+  } catch (error: any) {
+    console.error("Bulk delete by date error:", error);
+    res.status(500).json({ success: false, message: "Failed to delete bookings", error: error.message });
+  }
+});
+
+// Delete single registration
+router.delete("/registrations/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const registration = await BookingModel.findById(id);
+    if (!registration) {
+      res.status(404).json({ success: false, message: "Registration not found" });
+      return;
+    }
+    
+    const isVoidOrCancelled = registration.status === BookingStatus.Voided || registration.status === BookingStatus.Cancelled;
+    const seatCount = registration.seatNumbers ? registration.seatNumbers.length : 0;
+    
+    if (!isVoidOrCancelled && seatCount > 0) {
+      await EventModel.findByIdAndUpdate(registration.event, {
+        $inc: { availableSeats: seatCount },
+      });
+    }
+    
+    await BookingModel.findByIdAndDelete(id);
+    res.json({ success: true, message: "Registration deleted successfully" });
+  } catch (error: any) {
+    console.error("Delete registration error:", error);
+    res.status(500).json({ success: false, message: "Failed to delete registration", error: error.message });
   }
 });
 
