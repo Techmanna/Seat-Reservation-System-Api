@@ -277,7 +277,16 @@ export class NotificationService {
     });
   }
 
-  async sendCancellationConfirmationEmail(booking: Booking): Promise<void> { }
+  async sendCancellationConfirmationEmail(booking: Booking): Promise<void> {
+    const emailTemplates = new EmailTemplateBuilder();
+    const html = emailTemplates.generateBookingCancellation(booking);
+    const user = booking.user as User;
+    await sendEmail({
+      to: user.email,
+      subject: 'Booking Cancelled',
+      html
+    });
+  }
 
   /**
    * Get filtered users based on notification criteria

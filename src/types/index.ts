@@ -121,7 +121,7 @@ export interface SystemSettings {
     blockedDates?: Date[];
     minCancellationHours?: number;
     prioritySystemEnabled: boolean;
-    priorityAllocationPercentage: number;
+    prioritySeatAllocation: number;
     waitingListCapacity: number;
     autoAllocationHoursBeforeEvent: number;
     priorityRules: {

@@ -46,7 +46,7 @@ describe("Booking Prioritization System", () => {
       maxSeatsPerUser: 2,
       minCancellationHours: 2,
       prioritySystemEnabled: true,
-      priorityAllocationPercentage: 62.5, // 50 seats priority, 30 general
+      prioritySeatAllocation: 50, // 50 seats priority, 30 general
       waitingListCapacity: 5,
       autoAllocationHoursBeforeEvent: 12,
       priorityRules: {

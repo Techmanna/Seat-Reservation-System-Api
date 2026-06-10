@@ -267,9 +267,7 @@ export class BookingService {
         priorityScore = priorityResult.score;
 
         const totalCapacity = event.totalSeats;
-        const priorityCapacity = Math.floor(
-          (totalCapacity * settings.priorityAllocationPercentage) / 100
-        );
+        const priorityCapacity = Math.min(settings.prioritySeatAllocation, event.totalSeats);
         const generalCapacity = totalCapacity - priorityCapacity;
 
         const confirmedBookings = await BookingModel.find({
@@ -789,9 +787,7 @@ export class BookingService {
 
       // Calculate capacity
       const totalCapacity = event.totalSeats;
-      const priorityCapacity = Math.floor(
-        (totalCapacity * settings.priorityAllocationPercentage) / 100
-      );
+      const priorityCapacity = Math.min(settings.prioritySeatAllocation, event.totalSeats);
 
       // Count existing confirmed priority bookings
       const priorityTaken = await BookingModel.countDocuments({
@@ -1482,9 +1478,13 @@ export class BookingService {
           booking
         );
       } catch (notificationError) {
-        logger.error("Cancellation notification error:", notificationError);
-        // Don't fail the cancellation if email fails
+        logger.error("Notification error:", notificationError);
       }
+
+      // Automatically process the waitlist to fill the newly opened seats
+      this.processWaitlist(eventId.toString()).catch(err => {
+        logger.error("Failed to auto-process waitlist after cancellation:", err);
+      });
 
       logger.info(
         `Booking ${ticketId} cancelled successfully by user ${userEmail}`
@@ -1663,6 +1663,63 @@ export class BookingService {
         error: error.message,
         data: null,
       };
+    }
+  }
+
+  private async processWaitlist(eventId: string): Promise<void> {
+    try {
+      const event = await EventModel.findById(eventId);
+      if (!event || event.availableSeats <= 0) return;
+
+      const waitlist = await BookingModel.find({
+        event: eventId,
+        status: BookingStatus.Waitlisted,
+      })
+        .sort({ priorityScore: -1, createdAt: 1 })
+        .populate("user");
+
+      for (const wBooking of waitlist) {
+        if (event.availableSeats < wBooking.seatNumbers.length) {
+          continue; // Skip if they requested more seats than what's available
+        }
+
+        const bookedSeats = await BookingModel.find({
+          event: eventId,
+          status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided, BookingStatus.Waitlisted] },
+        }).select("seatNumbers");
+        const allBookedNumbers = bookedSeats.flatMap((b) => b.seatNumbers);
+
+        try {
+          const newSeats = SeatUtils.findNextAvailableSeats(
+            event.totalSeats,
+            allBookedNumbers,
+            wBooking.seatNumbers.length
+          );
+
+          wBooking.status = BookingStatus.Attending;
+          wBooking.seatNumbers = newSeats.numbers;
+          wBooking.seatLabels = newSeats.labels;
+
+          wBooking.qrCode = await this.qrService.generateQRCode(wBooking);
+          await wBooking.save();
+
+          event.availableSeats -= wBooking.seatNumbers.length;
+          await event.save();
+
+          await this.notificationService.sendWaitlistApprovedEmail(
+            wBooking.user as any,
+            wBooking
+          );
+
+          logger.info(`Waitlisted booking ${wBooking.ticketId} automatically approved due to seat cancellation.`);
+          
+          if (event.availableSeats <= 0) break;
+        } catch (err) {
+          logger.error(`Failed to assign seat to waitlist ${wBooking.ticketId}`, err);
+        }
+      }
+    } catch (err) {
+      logger.error("Error auto-processing waitlist:", err);
     }
   }
 }

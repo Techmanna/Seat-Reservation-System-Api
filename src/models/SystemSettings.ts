@@ -65,11 +65,10 @@ const systemSettingsSchema = new Schema<SystemSettings>(
       type: Boolean,
       default: false,
     },
-    priorityAllocationPercentage: {
+    prioritySeatAllocation: {
       type: Number,
       min: 0,
-      max: 100,
-      default: 62.5,
+      default: 50,
     },
     waitingListCapacity: {
       type: Number,
