@@ -1896,4 +1896,146 @@ router.delete("/events/:eventId", async (req, res) => {
   }
 });
 
+// ==========================================
+// USER MANAGEMENT ENDPOINTS
+// ==========================================
+
+// Get all users (paginated and filtered)
+router.get("/users", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const search = (req.query.search as string) || "";
+    
+    const skip = (page - 1) * limit;
+
+    // Build the match stage
+    const matchStage: any = {};
+    if (search) {
+      matchStage.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Get total count for pagination
+    const totalResult = await UserModel.aggregate([
+      { $match: matchStage },
+      { $count: 'total' }
+    ]);
+    const total = totalResult.length > 0 ? totalResult[0].total : 0;
+    const totalPages = Math.ceil(total / limit);
+
+    const users = await UserModel.aggregate([
+      { $match: matchStage },
+      { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limit },
+      {
+        $lookup: {
+          from: 'bookings',
+          localField: '_id',
+          foreignField: 'user',
+          as: 'bookings'
+        }
+      },
+      {
+        $addFields: {
+          bookingCount: { $size: '$bookings' },
+          id: { $toString: '$_id' }
+        }
+      },
+      {
+        $project: {
+          bookings: 0,
+          password: 0,
+          verificationOtp: 0,
+          resetPasswordToken: 0
+        }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      message: "Users retrieved successfully",
+      data: {
+        users,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages
+        }
+      }
+    });
+  } catch (error: any) {
+    console.error("Get users error:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch users", error: error.message });
+  }
+});
+
+// Delete user and cascade their bookings
+router.delete("/users/:id", async (req, res) => {
+  console.log("DELETE /users/:id HIT with ID:", req.params.id);
+  try {
+    const { id } = req.params;
+    
+    // Check if user exists
+    const user = await UserModel.findById(id);
+    if (!user) {
+      console.log("User not found in DB for ID:", id);
+      res.status(400).json({ success: false, message: "User not found in database. Please refresh the page." });
+      return;
+    }
+
+    // Find all bookings for this user to restore seats
+    const userBookings = await BookingModel.find({ user: id });
+    
+    // Calculate how many seats to restore per event
+    const eventCapacityIncrements: Record<string, number> = {};
+
+    for (const registration of userBookings) {
+      const isVoidOrCancelled = registration.status === BookingStatus.Voided || registration.status === BookingStatus.Cancelled;
+      const seatCount = registration.seatNumbers ? registration.seatNumbers.length : 0;
+      
+      if (!isVoidOrCancelled && seatCount > 0) {
+        const eventId = registration.event.toString();
+        if (!eventCapacityIncrements[eventId]) {
+          eventCapacityIncrements[eventId] = 0;
+        }
+        eventCapacityIncrements[eventId] += seatCount;
+      }
+    }
+
+    // Bulk update event capacities concurrently
+    const updatePromises = Object.keys(eventCapacityIncrements).map(eventId => {
+      return EventModel.findByIdAndUpdate(eventId, {
+        $inc: { availableSeats: eventCapacityIncrements[eventId] }
+      });
+    });
+    await Promise.all(updatePromises);
+
+    // Delete bookings
+    await BookingModel.deleteMany({ user: id });
+    
+    // Delete subscription (if any)
+    const { SubscriptionModel } = await import('../models/Subscription'); // dynamic import if missing, wait let's check if it is imported at top
+    await SubscriptionModel.deleteMany({ userId: id });
+
+    // Finally, delete the user
+    await UserModel.findByIdAndDelete(id);
+
+    res.json({
+      success: true,
+      message: "User and associated data deleted successfully"
+    });
+
+  } catch (error: any) {
+    console.error("Delete user error:", error);
+    res.status(500).json({ success: false, message: "Failed to delete user", error: error.message });
+  }
+});
+
 export default router;
+
