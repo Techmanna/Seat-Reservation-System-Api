@@ -1368,7 +1368,7 @@ router.post("/registrations/bulk-action", async (req, res) => {
 router.post("/registrations/bulk-delete-by-date", async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
-    
+    return;
     if (!startDate || !endDate) {
       res.status(400).json({ success: false, message: "Start date and end date are required" });
       return;
@@ -1382,26 +1382,39 @@ router.post("/registrations/bulk-delete-by-date", async (req, res) => {
       eventDate: { $gte: start, $lte: end }
     });
 
-    let modifiedCount = 0;
+    // Calculate how many seats to restore per event
+    const eventCapacityIncrements: Record<string, number> = {};
 
     for (const registration of bookings) {
       const isVoidOrCancelled = registration.status === BookingStatus.Voided || registration.status === BookingStatus.Cancelled;
       const seatCount = registration.seatNumbers ? registration.seatNumbers.length : 0;
       
       if (!isVoidOrCancelled && seatCount > 0) {
-        await EventModel.findByIdAndUpdate(registration.event, {
-          $inc: { availableSeats: seatCount },
-        });
+        const eventId = registration.event.toString();
+        if (!eventCapacityIncrements[eventId]) {
+          eventCapacityIncrements[eventId] = 0;
+        }
+        eventCapacityIncrements[eventId] += seatCount;
       }
-      
-      await BookingModel.findByIdAndDelete(registration._id);
-      modifiedCount++;
     }
+
+    // Bulk update event capacities concurrently
+    const updatePromises = Object.keys(eventCapacityIncrements).map(eventId => {
+      return EventModel.findByIdAndUpdate(eventId, {
+        $inc: { availableSeats: eventCapacityIncrements[eventId] }
+      });
+    });
+    await Promise.all(updatePromises);
+
+    // Perform a single bulk delete operation for all matching bookings
+    const result = await BookingModel.deleteMany({
+      eventDate: { $gte: start, $lte: end }
+    });
 
     res.json({
       success: true,
-      message: `Successfully deleted ${modifiedCount} bookings within the specified date range`,
-      data: { modifiedCount }
+      message: `Successfully deleted ${result.deletedCount} bookings within the specified date range`,
+      data: { modifiedCount: result.deletedCount }
     });
   } catch (error: any) {
     console.error("Bulk delete by date error:", error);
