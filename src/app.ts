@@ -34,7 +34,7 @@ const PORT = process.env.PORT || 3000;
 app.use((req, res, next) => {
   const start = Date.now();
   // Get IP (handles cases with/without proxies)
-  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  const ip = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
   res.on('finish', () => {
     const duration = Date.now() - start;
@@ -43,7 +43,7 @@ app.use((req, res, next) => {
 
   next();
 });
-
+app.set('trust proxy', 1);
 // Boot continuous automated verification
 CronService.startBackgroundJobs();
 
@@ -107,7 +107,7 @@ app.use((req, res, next) => {
   if (req.originalUrl === '/api/subscriptions/stripe/webhook' || req.originalUrl === '/api/webhooks/stripe') {
     express.raw({ type: 'application/json' })(req, res, next);
   } else {
-    express.json({ 
+    express.json({
       limit: '10mb',
       verify: (req: any, res, buf) => {
         req.rawBody = buf.toString();
@@ -152,25 +152,25 @@ app.use(errorHandler);
 
 // Connect to database
 if (process.env.SKIP_DB !== 'true') {
-    connectDB().catch(err => logger.error('DB Connection Error:', err));
+  connectDB().catch(err => logger.error('DB Connection Error:', err));
 }
 
 // Function to start the server
 const startServer = async (): Promise<void> => {
-    try {
-        app.listen(PORT, () => {
-            logger.info(`Server is running on port http://localhost:${PORT}`);
-            logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
-        });
-    } catch (error) {
-        logger.error('Failed to start server:', error);
-        process.exit(1);
-    }
+  try {
+    app.listen(PORT, () => {
+      logger.info(`Server is running on port http://localhost:${PORT}`);
+      logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    });
+  } catch (error) {
+    logger.error('Failed to start server:', error);
+    process.exit(1);
+  }
 };
 
 // Start the application only when not in test mode
 if (process.env.NODE_ENV !== 'test') {
-    startServer();
+  startServer();
 }
 
 export default app;
