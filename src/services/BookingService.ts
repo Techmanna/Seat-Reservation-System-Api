@@ -268,7 +268,7 @@ export class BookingService {
 
         const totalCapacity = event.totalSeats;
         const priorityCapacity = Math.min(settings.prioritySeatAllocation, event.totalSeats);
-        const generalCapacity = totalCapacity - priorityCapacity;
+        let generalCapacity = totalCapacity - priorityCapacity;
 
         const confirmedBookings = await BookingModel.find({
           event: event._id,
@@ -287,6 +287,12 @@ export class BookingService {
         const generalTaken = confirmedBookings.filter(
           (b) => b.category === "general"
         ).length;
+
+        // Drop the priority barrier if within the auto-allocation window
+        const hoursUntilEvent = (eventDate.getTime() - now.getTime()) / (1000 * 60 * 60);
+        if (hoursUntilEvent <= settings.autoAllocationHoursBeforeEvent) {
+          generalCapacity = totalCapacity - priorityTaken;
+        }
 
         if (priorityResult.isPriority) {
           // Priority User Logic

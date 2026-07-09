@@ -307,14 +307,13 @@ export class CronService {
             if (!settings.prioritySystemEnabled) return;
 
             const now = DateTime.now().setZone(EVENT_TIMEZONE);
-            // We look for events starting in approx settings.autoAllocationHoursBeforeEvent hours
             const targetTime = now.plus({ hours: settings.autoAllocationHoursBeforeEvent });
             
-            // Find events in a 1-hour window around the target time
+            // Find all upcoming events that start within the auto-allocation window
             const events = await EventModel.find({
                 date: { 
-                    $gte: targetTime.minus({ minutes: 30 }).toJSDate(), 
-                    $lte: targetTime.plus({ minutes: 30 }).toJSDate() 
+                    $gt: now.toJSDate(), 
+                    $lte: targetTime.toJSDate() 
                 }
             });
 
