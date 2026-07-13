@@ -622,7 +622,7 @@ export class BookingService {
       // Check seat availability again
       const bookedSeats = await BookingModel.find({
         event: event._id?.toString(),
-        status: { $ne: BookingStatus.Cancelled },
+        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
       }).select("seatNumbers seatLabels");
 
       const allBookedSeatNumbers = bookedSeats.flatMap(
