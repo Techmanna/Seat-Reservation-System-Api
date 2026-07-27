@@ -6,8 +6,73 @@ import { logger } from '../utils/logger';
 import { sendSMS } from '../utils/sms';
 import { BookingModel } from '../models/Booking';
 import { startOfDay, endOfDay } from 'date-fns';
+import { NotificationType } from '../models/Notification';
+import { NotificationPreferenceModel } from '../models/NotificationPreference';
+import { InAppNotificationService } from './InAppNotificationService';
+
+const inAppService = new InAppNotificationService();
 
 export class NotificationService {
+
+  /**
+   * Unified notification method that respects user preferences
+   */
+  async notify(
+    userId: string, 
+    type: NotificationType, 
+    title: string, 
+    message: string, 
+    data: any = {}
+  ): Promise<void> {
+    try {
+      const prefs = await inAppService.getPreferences(userId);
+      let categoryPrefs;
+
+      switch(type) {
+        case NotificationType.REMINDER:
+          categoryPrefs = prefs.reminders;
+          break;
+        case NotificationType.EVENT:
+          categoryPrefs = prefs.events;
+          break;
+        case NotificationType.BILLING:
+          categoryPrefs = prefs.billing;
+          break;
+        default:
+          categoryPrefs = { inApp: true, email: true, sms: false };
+      }
+
+      // 1. In-App Notification
+      if (categoryPrefs.inApp) {
+        await inAppService.createNotification(userId, type, title, message, data);
+      }
+
+      // 2. Email Notification
+      if (categoryPrefs.email) {
+        // Find user email
+        const { UserModel } = require('../models/User');
+        const user = await UserModel.findById(userId);
+        if (user && user.email) {
+          await sendEmail({
+            to: user.email,
+            subject: title,
+            html: this.createEmailTemplate(message, user.name || 'User')
+          });
+        }
+      }
+
+      // 3. SMS Notification
+      if (categoryPrefs.sms) {
+        const { UserModel } = require('../models/User');
+        const user = await UserModel.findById(userId);
+        if (user && user.phone) {
+          await sendSMS(user.phone, `${title}: ${message}`);
+        }
+      }
+    } catch (error) {
+      logger.error('[NotificationService] notify failed:', error);
+    }
+  }
 
   async sendBookingConfirmationEmail(user: User, booking: Booking, event: any): Promise<void> {
     const emailTemplates = new EmailTemplateBuilder();
@@ -16,7 +81,7 @@ export class NotificationService {
     const mailOptions = {
       from: config.mail.from,
       to: user.email,
-      subject: 'Booking Confirmation - Event Hall Reservation',
+      subject: 'Booking Confirmation',
       html,
     };
 
@@ -24,9 +89,42 @@ export class NotificationService {
   }
 
   async sendTicketSMS(phone: string, ticketId: string): Promise<void> {
-    const message = `Your event hall booking is confirmed! Ticket ID: ${ticketId}. Please keep this for verification at the event.`;
+    const message = `Your booking is confirmed! Ticket ID: ${ticketId}. Please keep this for verification at the event.`;
 
     await sendSMS(phone, message);
+  }
+
+  async sendWaitlistConfirmationEmail(user: User, booking: Booking): Promise<void> {
+    const emailTemplates = new EmailTemplateBuilder();
+    const html = emailTemplates.generateWaitlistConfirmation(booking);
+
+    await sendEmail({
+      to: user.email,
+      subject: "You're on the Waiting List",
+      html,
+    });
+  }
+
+  async sendBookingRejectionEmail(user: User, eventDate: Date, reason: string): Promise<void> {
+    const emailTemplates = new EmailTemplateBuilder();
+    const html = emailTemplates.generateBookingRejection(user, eventDate, reason);
+
+    await sendEmail({
+      to: user.email,
+      subject: "Booking Capacity Reached",
+      html,
+    });
+  }
+
+  async sendWaitlistApprovedEmail(user: User, booking: Booking): Promise<void> {
+    const emailTemplates = new EmailTemplateBuilder();
+    const html = emailTemplates.generateWaitlistApproved(booking);
+
+    await sendEmail({
+      to: user.email,
+      subject: "Your Booking has been Confirmed!",
+      html,
+    });
   }
 
   async sendBulkNotification(users: User[], message: string, type: 'sms' | 'email' = 'email'): Promise<void> {
@@ -35,10 +133,10 @@ export class NotificationService {
         const mailOptions = {
           from: process.env.FROM_EMAIL || 'noreply@eventhall.com',
           to: user.email,
-          subject: 'Event Hall Notification',
+          subject: 'The Morayo Show',
           html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-              <h2 style="color: #333;">Event Hall Notification</h2>
+              <h2 style="color: #333;">The Morayo Show</h2>
               <p>Dear ${user.name},</p>
               <p>${message}</p>
               <hr style="margin: 30px 0;">
@@ -52,8 +150,10 @@ export class NotificationService {
       });
       await Promise.all(promises);
     } else {
-      const phoneNumbers = users.map(user => user.phone);
-      await sendSMS(phoneNumbers, message);
+      const phoneNumbers = users.map(user => user.phone).filter((p): p is string => !!p);
+      if (phoneNumbers.length > 0) {
+        await sendSMS(phoneNumbers, message);
+      }
     }
   }
 
@@ -74,6 +174,12 @@ export class NotificationService {
     } catch (error) {
       logger.error('Failed to send OTP email2:', error);
     }
+  }
+
+  // Send OTP via SMS
+  async sendOTPSMS(phone: string, otp: string, name: string): Promise<void> {
+    const message = `MAB Studios, Your OTP code is: ${otp}. It is valid for 10 minutes.`;
+    await sendSMS(phone, message);
   }
 
   // Send welcome email
@@ -171,7 +277,16 @@ export class NotificationService {
     });
   }
 
-  async sendCancellationConfirmationEmail(booking: Booking): Promise<void> { }
+  async sendCancellationConfirmationEmail(booking: Booking): Promise<void> {
+    const emailTemplates = new EmailTemplateBuilder();
+    const html = emailTemplates.generateBookingCancellation(booking);
+    const user = booking.user as User;
+    await sendEmail({
+      to: user.email,
+      subject: 'Booking Cancelled',
+      html
+    });
+  }
 
   /**
    * Get filtered users based on notification criteria

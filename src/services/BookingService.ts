@@ -1,17 +1,10 @@
 import { UserModel } from "../models/User";
 import { EventModel } from "../models/Event";
 import { BookingModel } from "../models/Booking";
-import { SystemSettingsModel } from "../models/SystemSettings";
+import { HallModel } from "../models/Hall";
 import { QRService } from "./QRService";
 import { v4 as uuidv4 } from "uuid";
-import {
-  startOfDay,
-  endOfDay,
-  isAfter,
-  isBefore,
-  addMinutes,
-  isWithinInterval,
-} from "date-fns";
+import { DateTime } from "luxon";
 import {
   BookingRequest,
   Booking,
@@ -28,8 +21,11 @@ import { NotificationService } from "./NotificationService";
 import { OTPModel } from "../models/OTP";
 import { PendingBookingModel } from "../models/PendingBooking";
 import { getSystemSettings } from "./SettingsService";
+import { HallService } from "./HallService";
 import config from "../config/environment";
 import * as crypto from "crypto";
+import { buildEventUtcDate, EVENT_HOUR_WAT, EVENT_MINUTE_WAT, getEventEndTime, getEventStartTime, getLagosEndOfDay, getLagosStartOfDay } from "../utils/formatDate";
+import { PriorityService } from "./PriorityService";
 
 interface BookingRequestWithSeats extends Omit<BookingRequest, "seatNumbers"> {
   seatLabels: string[];
@@ -38,11 +34,13 @@ interface BookingRequestWithSeats extends Omit<BookingRequest, "seatNumbers"> {
 export class BookingService {
   private notificationService: NotificationService;
   private qrService: QRService;
+  private priorityService: PriorityService;
   private pendingBookings: Map<string, PendingBooking> = new Map();
 
   constructor() {
     this.notificationService = new NotificationService();
     this.qrService = new QRService();
+    this.priorityService = new PriorityService();
 
     // Clean up expired pending bookings every 10 minutes
     setInterval(() => this.cleanupExpiredBookings(), 10 * 60 * 1000);
@@ -77,31 +75,36 @@ export class BookingService {
   async initiateBooking(bookingData: BookingRequest): Promise<
     | ApiResponse<Booking>
     | ApiResponse<{
-        tempId?: string;
-        expiresAt?: Date;
-        reservationToken: string;
-        requiresOTP: boolean;
-      }>
+      tempId?: string;
+      expiresAt?: Date;
+      reservationToken: string;
+      requiresOTP: boolean;
+    }>
   > {
     try {
       // Perform all the validation checks first (same as original createBooking)
-      const settings = await getSystemSettings();
-      const now = new Date();
-      const selected = startOfDay(new Date(bookingData.eventDate));
-      const start = startOfDay(settings.reservationOpenDate);
-      const end = endOfDay(settings.reservationCloseDate);
-      console.log({
-        now,
-        reservationOpenDate: settings.reservationOpenDate,
-        reservationCloseDate: settings.reservationCloseDate,
-        selectedDate: bookingData.eventDate,
-      });
-
+      let settings;
+      if (bookingData.hallId) {
+          const hallResponse = await new HallService().getHallById(bookingData.hallId);
+          if (!hallResponse.data) {
+              return { success: false, message: "Hall not found", error: "Not found" };
+          }
+          settings = hallResponse.data;
+      } else {
+          settings = await HallService.getDefaultHall();
+          bookingData.hallId = settings._id?.toString();
+      }
+      
+      const now = DateTime.now().setZone('Africa/Lagos').toJSDate();
+      const selected = getLagosStartOfDay(bookingData.eventDate);
+      const start = getLagosStartOfDay(settings.reservationOpenDate);
+      const end = getLagosEndOfDay(settings.reservationCloseDate);
+      
       // Check if reservations are open
       if (
         settings.reservationOpenDate &&
         settings.reservationCloseDate &&
-        !isWithinInterval(selected, { start, end })
+        (selected.getTime() < start.getTime() || selected.getTime() > end.getTime())
       ) {
         return {
           success: false,
@@ -112,7 +115,7 @@ export class BookingService {
 
       const eventDate = new Date(bookingData.eventDate);
       // Check if event date is in the future
-      if (isBefore(eventDate, startOfDay(now))) {
+      if (eventDate.getTime() < getLagosStartOfDay(now).getTime()) {
         return {
           success: false,
           message: "Cannot book for past dates",
@@ -137,9 +140,10 @@ export class BookingService {
       if (existingUser) {
         const existingBooking = await BookingModel.findOne({
           user: { _id: existingUser._id?.toString() },
+          hall: bookingData.hallId,
           eventDate: {
-            $gte: startOfDay(eventDate),
-            $lte: endOfDay(eventDate),
+            $gte: getLagosStartOfDay(eventDate),
+            $lte: getLagosEndOfDay(eventDate),
           },
           status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
         });
@@ -155,11 +159,10 @@ export class BookingService {
         // or the pending booking
         const pendingBooking = await PendingBookingModel.findOne({
           email: bookingData.email,
-          bookingData: {
-            eventDate: {
-              $gte: startOfDay(eventDate),
-              $lte: endOfDay(eventDate),
-            },
+          "bookingData.hallId": bookingData.hallId,
+          "bookingData.eventDate": {
+            $gte: getLagosStartOfDay(eventDate),
+            $lte: getLagosEndOfDay(eventDate),
           },
         });
 
@@ -183,20 +186,29 @@ export class BookingService {
 
       // Find or create event
       let event = await EventModel.findOne({
+        hall: bookingData.hallId,
         date: {
-          $gte: startOfDay(eventDate),
-          $lte: endOfDay(eventDate),
+          $gte: getLagosStartOfDay(eventDate),
+          $lte: getLagosEndOfDay(eventDate),
         },
       });
 
       if (!event) {
         const totalSeats = SeatUtils.resolveTotalSeats(settings, eventDate)
+        const eventUtcDate = buildEventUtcDate(eventDate);
+        const title = `The Morayo Show Live - ${eventUtcDate.toDateString()}`;
+
         event = new EventModel({
-          date: eventDate,
-          time: settings.eventTimes[0] || "10:00 AM",
+          hall: bookingData.hallId,
+          date: eventUtcDate,
+          // time: settings.eventTimes[0] || "11:00",
+          // time: `${String(EVENT_HOUR_WAT).padStart(2, '0')}:${String(EVENT_MINUTE_WAT).padStart(2, '0')}`,
+          time: getEventStartTime(),
+          endTime: getEventEndTime(),
           totalSeats,
           availableSeats: totalSeats,
           isActive: true,
+          title,
         });
         await event.save();
       }
@@ -231,14 +243,16 @@ export class BookingService {
 
       // Check if requested seats are available in both confirmed and pending bookings
       const bookedSeats = await BookingModel.find({
-        eventId: event._id?.toString(),
+        event: event._id?.toString(),
+        hall: bookingData.hallId,
         status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
       }).select("seatNumbers seatLabels");
 
       const pendingBookings = await PendingBookingModel.find({
+        "bookingData.hallId": bookingData.hallId,
         "bookingData.eventDate": {
-          $gte: startOfDay(eventDate),
-          $lte: endOfDay(eventDate),
+          $gte: getLagosStartOfDay(eventDate),
+          $lte: getLagosEndOfDay(eventDate),
         },
         expiresAt: { $gt: new Date() }, // Only check non-expired pending bookings
       }).select("bookingData.seatLabels bookingData.seatNumbers");
@@ -255,6 +269,99 @@ export class BookingService {
       const allPendingSeatLabels = pendingBookings.flatMap(
         (pending) => pending.bookingData.seatLabels || []
       );
+
+      // PRIORITY SYSTEM LOGIC
+      let category: "priority" | "general" = "general";
+      let isWaitlist = false;
+      let priorityScore = 0;
+
+      if (settings.prioritySystemEnabled) {
+        const priorityResult = await this.priorityService.calculatePriority(
+          bookingData.email,
+          bookingData.hallId!,
+          settings
+        );
+        priorityScore = priorityResult.score;
+
+        const totalCapacity = event.totalSeats;
+        const priorityCapacity = Math.min(settings.prioritySeatAllocation, event.totalSeats);
+        let generalCapacity = totalCapacity - priorityCapacity;
+
+        const confirmedBookings = await BookingModel.find({
+          event: event._id,
+          status: {
+            $nin: [
+              BookingStatus.Cancelled,
+              BookingStatus.Voided,
+              BookingStatus.Waitlisted,
+            ],
+          },
+        }).select("category");
+
+        const priorityTaken = confirmedBookings.filter(
+          (b) => b.category === "priority"
+        ).length;
+        const generalTaken = confirmedBookings.filter(
+          (b) => b.category === "general"
+        ).length;
+
+        // Drop the priority barrier if within the auto-allocation window
+        const hoursUntilEvent = (eventDate.getTime() - now.getTime()) / (1000 * 60 * 60);
+        if (hoursUntilEvent <= settings.autoAllocationHoursBeforeEvent) {
+          generalCapacity = totalCapacity - priorityTaken;
+        }
+
+        if (priorityResult.isPriority) {
+          // Priority User Logic
+          if (priorityTaken < priorityCapacity) {
+            category = "priority";
+          } else if (generalTaken < generalCapacity) {
+            category = "general";
+          } else {
+            // All seats full, but priority users are confirmed immediately?
+            // The requirement says "Priority users should be confirmed immediately."
+            // but if there are 0 physical seats, they must waitlist too.
+            // However, we give them priority category.
+            isWaitlist = true;
+            category = "priority";
+          }
+        } else {
+          // General User Logic
+          if (generalTaken < generalCapacity) {
+            category = "general";
+          } else {
+            // General pool full
+            isWaitlist = true;
+            category = "general";
+
+            // Check waitlist capacity
+            const currentWaitlistedCount = await BookingModel.countDocuments({
+              event: event._id,
+              status: BookingStatus.Waitlisted,
+            });
+
+            if (currentWaitlistedCount >= settings.waitingListCapacity) {
+              // Send rejection email if waitlist is full
+              try {
+                await this.notificationService.sendBookingRejectionEmail(
+                  { email: bookingData.email, name: bookingData.name } as any,
+                  eventDate,
+                  "Event and waiting list are both full."
+                );
+              } catch (err) {
+                logger.error("Failed to send rejection email:", err);
+              }
+
+              return {
+                success: false,
+                message:
+                  "We're sorry, this event has reached full capacity and the waiting list is also full.",
+                error: "Waitlist full",
+              };
+            }
+          }
+        }
+      }
 
       const conflictingNumbers = seatNumbers.filter(
         (seat) =>
@@ -288,6 +395,9 @@ export class BookingService {
         ...bookingData,
         eventDate,
         reservationToken,
+        category,
+        priorityScore,
+        isWaitlist,
       };
 
       // Check if user exists to determine if OTP is required
@@ -313,7 +423,7 @@ export class BookingService {
         // New user, require OTP verification
         const otp = this.generateOTP();
         const tempId = uuidv4();
-        const expiresAt = addMinutes(now, 10); // OTP expires in 10 minutes
+        const expiresAt = DateTime.now().plus({ minutes: 10 }).toJSDate(); // OTP expires in 10 minutes
 
         // Store or update OTP
         await OTPModel.findOneAndUpdate(
@@ -349,6 +459,14 @@ export class BookingService {
             otp,
             bookingData.name
           );
+          // Send OTP SMS for phone verification if phone number is provided
+          if (bookingData.phone) {
+            await this.notificationService.sendOTPSMS(
+              bookingData.phone,
+              otp,
+              bookingData.name
+            );
+          }
         } catch (emailError) {
           logger.error("Failed to send OTP email:", emailError);
           return {
@@ -398,7 +516,7 @@ export class BookingService {
       }
 
       // Check if OTP is expired
-      if (isAfter(new Date(), otpRecord.expiresAt)) {
+      if (DateTime.now().toJSDate() > otpRecord.expiresAt) {
         await Promise.all([
           OTPModel.deleteOne({ _id: otpRecord._id }),
           PendingBookingModel.deleteOne({ email, tempId }),
@@ -439,9 +557,8 @@ export class BookingService {
         await otpRecord.save();
         return {
           success: false,
-          message: `Invalid verification code. ${
-            3 - otpRecord.attempts
-          } attempts remaining.`,
+          message: `Invalid verification code. ${3 - otpRecord.attempts
+            } attempts remaining.`,
           error: "Invalid OTP",
         };
       }
@@ -493,13 +610,13 @@ export class BookingService {
   ): Promise<ApiResponse<Booking>> {
     try {
       const eventDate = new Date(bookingData.eventDate);
-      const settings = await getSystemSettings();
 
       // Find event
       let event = await EventModel.findOne({
+        hall: bookingData.hallId,
         date: {
-          $gte: startOfDay(eventDate),
-          $lte: endOfDay(eventDate),
+          $gte: getLagosStartOfDay(eventDate),
+          $lte: getLagosEndOfDay(eventDate),
         },
       });
 
@@ -521,8 +638,9 @@ export class BookingService {
 
       // Check seat availability again
       const bookedSeats = await BookingModel.find({
-        eventId: event._id?.toString(),
-        status: { $ne: BookingStatus.Cancelled },
+        event: event._id?.toString(),
+        hall: bookingData.hallId,
+        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
       }).select("seatNumbers seatLabels");
 
       const allBookedSeatNumbers = bookedSeats.flatMap(
@@ -573,10 +691,15 @@ export class BookingService {
         ticketId,
         user,
         event,
+        hall: bookingData.hallId,
         eventDate: eventDate,
         seatNumbers,
         seatLabels,
-        status: BookingStatus.Attending,
+        status: bookingData.isWaitlist
+          ? BookingStatus.Waitlisted
+          : BookingStatus.Attending,
+        category: bookingData.category,
+        priorityScore: bookingData.priorityScore,
         reservationToken: bookingData.reservationToken,
         qrCode: "",
         calendarLink: this.generateGoogleCalendarLink(
@@ -593,27 +716,50 @@ export class BookingService {
       await booking.save();
 
       // Update event available seats
-      event.availableSeats -= seatNumbers.length;
-      await event.save();
+      if (!bookingData.isWaitlist) {
+        event.availableSeats -= seatNumbers.length;
+        await event.save();
+      }
+
+      await booking.populate("hall");
 
       // Send notifications
       try {
-        await Promise.all([
-          this.notificationService.sendTicketSMS(user.phone, ticketId),
-          this.notificationService.sendBookingConfirmationEmail(
-            user,
-            booking,
-            event
-          ),
-        ]);
+        const promises: Promise<any>[] = [];
+
+        if (bookingData.isWaitlist) {
+          promises.push(
+            this.notificationService.sendWaitlistConfirmationEmail(
+              user,
+              booking
+            )
+          );
+        } else {
+          promises.push(
+            this.notificationService.sendBookingConfirmationEmail(
+              user,
+              booking,
+              event
+            )
+          );
+
+          if (user.phone) {
+            promises.push(
+              this.notificationService.sendTicketSMS(user.phone, ticketId)
+            );
+          }
+        }
+
+        await Promise.all(promises);
       } catch (notificationError) {
         logger.error("Notification error:", notificationError);
       }
 
       return {
         success: true,
-        message:
-          "Booking completed successfully! Check your email for confirmation.",
+        message: bookingData.isWaitlist
+          ? "You have been added to the waiting list! Check your email for details."
+          : "Booking completed successfully! Check your email for confirmation.",
         data: booking,
       };
     } catch (error: any) {
@@ -655,6 +801,185 @@ export class BookingService {
     )}&location=${encodeURIComponent(eventData.location)}`;
   }
 
+  /**
+   * Automatically allocate unused priority seats to waitlisted users
+   */
+  public async allocateFromWaitlist(eventId: string): Promise<void> {
+    try {
+      const event = await EventModel.findById(eventId);
+      if (!event) return;
+
+      const hallResponse = await new HallService().getHallById(event.hall.toString());
+      const settings = hallResponse.data;
+      if (!settings || !settings.prioritySystemEnabled) return;
+
+      // Calculate capacity
+      const totalCapacity = event.totalSeats;
+      const priorityCapacity = Math.min(settings.prioritySeatAllocation, event.totalSeats);
+
+      // Count existing confirmed priority bookings
+      const priorityTaken = await BookingModel.countDocuments({
+        event: eventId,
+        status: {
+          $nin: [
+            BookingStatus.Cancelled,
+            BookingStatus.Voided,
+            BookingStatus.Waitlisted,
+          ],
+        },
+        category: "priority",
+      });
+
+      let remainingPrioritySlots = priorityCapacity - priorityTaken;
+      if (remainingPrioritySlots <= 0) {
+        logger.info(`No remaining priority slots for event ${eventId}`);
+        return;
+      }
+
+      // Get waitlisted bookings sorted by priority score and date
+      const waitlist = await BookingModel.find({
+        event: eventId,
+        status: BookingStatus.Waitlisted,
+      })
+        .sort({ priorityScore: -1, createdAt: 1 })
+        .populate("user");
+
+      for (const booking of waitlist) {
+        if (remainingPrioritySlots <= 0) break;
+
+        // Find current available seats for this specific event
+        const bookedSeats = await BookingModel.find({
+          event: eventId,
+          status: {
+            $nin: [
+              BookingStatus.Cancelled,
+              BookingStatus.Voided,
+              BookingStatus.Waitlisted,
+            ],
+          },
+        }).select("seatNumbers");
+        const allBookedNumbers = bookedSeats.flatMap((b) => b.seatNumbers);
+
+        try {
+          const newSeats = SeatUtils.findNextAvailableSeats(
+            event.totalSeats,
+            allBookedNumbers,
+            booking.seatNumbers.length
+          );
+
+          booking.status = BookingStatus.Attending;
+          booking.seatNumbers = newSeats.numbers;
+          booking.seatLabels = newSeats.labels;
+          booking.category = "priority"; // Assign to priority pool
+
+          // Generate new QR code since seat changed
+          booking.qrCode = await this.qrService.generateQRCode(booking);
+          await booking.save();
+
+          event.availableSeats -= booking.seatNumbers.length;
+          await event.save();
+
+          remainingPrioritySlots--;
+
+          // Notify user
+          await this.notificationService.sendWaitlistApprovedEmail(
+            booking.user as any,
+            booking
+          );
+
+          logger.info(
+            `Waitlisted booking ${
+              booking.ticketId
+            } approved and allocated to seats ${booking.seatLabels.join(", ")}`
+          );
+        } catch (error) {
+          logger.error(
+            `Failed to allocate seats for waitlisted booking ${booking.ticketId}:`,
+            error
+          );
+        }
+      }
+    } catch (error) {
+      logger.error("Error in allocateFromWaitlist:", error);
+    }
+  }
+
+  /**
+   * Manually approve a waitlisted booking
+   */
+  public async approveWaitlistedBooking(
+    ticketId: string
+  ): Promise<ApiResponse<Booking>> {
+    try {
+      const booking = await BookingModel.findOne({
+        ticketId,
+        status: BookingStatus.Waitlisted,
+      }).populate("user event hall");
+
+      if (!booking) {
+        return {
+          success: false,
+          message: "Waitlisted booking not found",
+          error: "Not found",
+        };
+      }
+
+      const event = booking.event as any;
+      const bookedSeats = await BookingModel.find({
+        event: event._id,
+        status: {
+          $nin: [
+            BookingStatus.Cancelled,
+            BookingStatus.Voided,
+            BookingStatus.Waitlisted,
+          ],
+        },
+      }).select("seatNumbers");
+      const allBookedNumbers = bookedSeats.flatMap((b) => b.seatNumbers);
+
+      try {
+        const newSeats = SeatUtils.findNextAvailableSeats(
+          event.totalSeats,
+          allBookedNumbers,
+          booking.seatNumbers.length
+        );
+
+        booking.status = BookingStatus.Attending;
+        booking.seatNumbers = newSeats.numbers;
+        booking.seatLabels = newSeats.labels;
+        booking.qrCode = await this.qrService.generateQRCode(booking);
+        await booking.save();
+
+        event.availableSeats -= booking.seatNumbers.length;
+        await event.save();
+
+        await this.notificationService.sendWaitlistApprovedEmail(
+          booking.user as any,
+          booking
+        );
+
+        return {
+          success: true,
+          message: "Booking approved successfully",
+          data: booking,
+        };
+      } catch (error: any) {
+        return {
+          success: false,
+          message: error.message,
+          error: "No seats available",
+        };
+      }
+    } catch (error: any) {
+      logger.error("Approve waitlist error:", error);
+      return {
+        success: false,
+        message: "Failed to approve booking",
+        error: error.message,
+      };
+    }
+  }
+
   async resendOTP(email: string): Promise<ApiResponse<{ expiresAt: Date }>> {
     try {
       // Get pending booking from database
@@ -673,9 +998,9 @@ export class BookingService {
         };
       }
 
-      const now = new Date();
+      const now = DateTime.now();
       const otp = this.generateOTP();
-      const expiresAt = addMinutes(now, 10);
+      const expiresAt = now.plus({ minutes: 10 }).toJSDate();
 
       // Update OTP record
       await OTPModel.findOneAndUpdate(
@@ -698,6 +1023,15 @@ export class BookingService {
         otp,
         pendingBooking.bookingData.name
       );
+
+      // Send OTP SMS for phone verification if phone number is provided
+      if (pendingBooking.bookingData.phone) {
+        await this.notificationService.sendOTPSMS(
+          pendingBooking.bookingData.phone,
+          otp,
+          pendingBooking.bookingData.name
+        );
+      }
 
       return {
         success: true,
@@ -748,7 +1082,7 @@ export class BookingService {
         { ticketId, status: BookingStatus.Attending },
         { status: BookingStatus.Attended },
         { new: true }
-      ).populate("user event");
+      ).populate("user event hall");
 
       if (!booking) {
         return {
@@ -772,16 +1106,27 @@ export class BookingService {
     }
   }
 
-  async getAvailableSeats(eventDate: string): Promise<ApiResponse<any>> {
+  async getAvailableSeats(eventDate: string, hallId?: string): Promise<ApiResponse<any>> {
     try {
       const date = new Date(eventDate);
-      const settings = await getSystemSettings();
+      let settings;
+      if (hallId) {
+          const hallResponse = await new HallService().getHallById(hallId);
+          if (!hallResponse.data) {
+              return { success: false, message: "Hall not found", error: "Not found" };
+          }
+          settings = hallResponse.data;
+      } else {
+          settings = await HallService.getDefaultHall();
+          hallId = settings._id?.toString();
+      }
 
       // Find or get default event info
       let event = await EventModel.findOne({
+        hall: hallId,
         date: {
-          $gte: startOfDay(date),
-          $lte: endOfDay(date),
+          $gte: getLagosStartOfDay(date),
+          $lte: getLagosEndOfDay(date),
         },
       });
 
@@ -791,9 +1136,10 @@ export class BookingService {
 
       // Get booked seats for this date
       const bookedSeats = await BookingModel.find({
+        hall: hallId,
         eventDate: {
-          $gte: startOfDay(date),
-          $lte: endOfDay(date),
+          $gte: getLagosStartOfDay(date),
+          $lte: getLagosEndOfDay(date),
         },
         status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
       }).select("seatNumbers seatLabels");
@@ -840,15 +1186,20 @@ export class BookingService {
     search = "",
     status,
     eventDate,
+    hallId,
   }: {
     page?: number;
     limit?: number;
     search?: string;
     status?: string;
     eventDate?: string;
+    hallId?: string;
   }): Promise<ApiResponse<Booking[]>> {
     try {
       const query: any = {};
+      if (hallId) {
+        query.hall = hallId;
+      }
 
       // Search by user full name or event name
       // Search by user or event fields
@@ -887,15 +1238,15 @@ export class BookingService {
       if (eventDate) {
         const date = new Date(eventDate as string);
         query.eventDate = {
-          $gte: startOfDay(date),
-          $lte: endOfDay(date),
+          $gte: getLagosStartOfDay(date),
+          $lte: getLagosEndOfDay(date),
         };
       }
 
       const skip = (page - 1) * limit;
 
       const bookings = await BookingModel.find(query)
-        .populate("user event")
+        .populate("user event hall")
         .skip(skip)
         .limit(limit)
         .sort({ createdAt: -1 }) // most recent first
@@ -930,17 +1281,25 @@ export class BookingService {
     includeFullyBooked = false,
     startDate,
     endDate,
+    hallId,
   }: {
     page?: number;
     limit?: number;
     includeFullyBooked?: boolean;
     startDate?: string;
     endDate?: string;
+    hallId?: string;
   }): Promise<ApiResponse<any>> {
     try {
-      const settings = await getSystemSettings();
-      const now = new Date();
-      const today = startOfDay(now);
+      let settings;
+      if (hallId) {
+        const hallResponse = await new HallService().getHallById(hallId);
+        settings = hallResponse.data || (await HallService.getDefaultHall());
+      } else {
+        settings = await HallService.getDefaultHall();
+      }
+      const now = DateTime.now().setZone('Africa/Lagos');
+      const today = now.startOf('day').toJSDate();
 
       // Build query for upcoming events
       const query: any = {
@@ -948,18 +1307,22 @@ export class BookingService {
         isActive: true,
       };
 
+      if (hallId) {
+        query.hall = hallId;
+      }
+
       // Add date range filters if provided
       if (startDate) {
-        query.date.$gte = startOfDay(new Date(startDate));
+        query.date.$gte = getLagosStartOfDay(startDate);
       }
 
       if (endDate) {
-        query.date.$lte = endOfDay(new Date(endDate));
+        query.date.$lte = getLagosEndOfDay(endDate);
       }
 
       // Ensure we don't go beyond reservation close date
       if (settings.reservationCloseDate) {
-        query.date.$lte = endOfDay(new Date(settings.reservationCloseDate));
+        query.date.$lte = getLagosEndOfDay(settings.reservationCloseDate);
       }
 
       const skip = (page - 1) * limit;
@@ -980,8 +1343,8 @@ export class BookingService {
           // Get booking statistics for this event
           const bookings = await BookingModel.find({
             eventDate: {
-              $gte: startOfDay(new Date(event.date)),
-              $lte: endOfDay(new Date(event.date)),
+              $gte: getLagosStartOfDay(event.date),
+              $lte: getLagosEndOfDay(event.date),
             },
             status: { $ne: BookingStatus.Cancelled },
           }).select("seatNumbers seatLabels status");
@@ -1002,12 +1365,9 @@ export class BookingService {
             event.availableSeats === 0 || totalBookedSeats >= event.totalSeats;
           const isBookable =
             !isFullyBooked &&
-            !isBefore(new Date(event.date), today) &&
+            DateTime.fromJSDate(new Date(event.date)).startOf('day') >= DateTime.now().setZone('Africa/Lagos').startOf('day') &&
             (!settings.reservationCloseDate ||
-              !isAfter(
-                new Date(event.date),
-                new Date(settings.reservationCloseDate)
-              ));
+              DateTime.fromJSDate(new Date(event.date)).startOf('day') <= DateTime.fromJSDate(new Date(settings.reservationCloseDate)).startOf('day'));
 
           // Check if it's a working day
           const eventDay = new Date(event.date).getDay();
@@ -1094,7 +1454,7 @@ export class BookingService {
       const booking = await BookingModel.findOne({
         ticketId,
         status: BookingStatus.Attending,
-      }).populate("user event");
+      }).populate("user event hall");
 
       if (!booking) {
         return {
@@ -1134,7 +1494,8 @@ export class BookingService {
       // }
 
       // Check if cancellation is allowed (e.g., not too close to event date)
-      const settings = await getSystemSettings();
+      const hallResponse = await new HallService().getHallById(booking.hall.toString());
+      const settings = hallResponse.data || await HallService.getDefaultHall();
       const now = new Date();
       const eventDate = new Date(booking.eventDate);
       const hoursUntilEvent =
@@ -1159,8 +1520,8 @@ export class BookingService {
       // booking.event may be an ObjectId or a populated Event object
       const eventId =
         typeof booking.event === "object" &&
-        booking.event !== null &&
-        "_id" in booking.event
+          booking.event !== null &&
+          "_id" in booking.event
           ? (booking.event as any)._id
           : booking.event;
       const event = await EventModel.findById(eventId);
@@ -1175,9 +1536,13 @@ export class BookingService {
           booking
         );
       } catch (notificationError) {
-        logger.error("Cancellation notification error:", notificationError);
-        // Don't fail the cancellation if email fails
+        logger.error("Notification error:", notificationError);
       }
+
+      // Automatically process the waitlist to fill the newly opened seats
+      this.processWaitlist(eventId.toString()).catch(err => {
+        logger.error("Failed to auto-process waitlist after cancellation:", err);
+      });
 
       logger.info(
         `Booking ${ticketId} cancelled successfully by user ${userEmail}`
@@ -1206,7 +1571,7 @@ export class BookingService {
         { ticketId, status: BookingStatus.Attending },
         { status: BookingStatus.Cancelled, cancelledAt: now },
         { new: true }
-      ).populate("user event");
+      ).populate("user event hall");
 
       if (!booking) {
         return {
@@ -1232,23 +1597,27 @@ export class BookingService {
   }
 
   // getUpcomingEvents
-  async getUpcomingEventsSummary(): Promise<ApiResponse<any>> {
+  async getUpcomingEventsSummary(hallId?: string): Promise<ApiResponse<any>> {
     try {
-      const settings = await getSystemSettings();
-      const now = new Date();
-      const today = startOfDay(now);
+      let settings;
+      if (hallId) {
+        const hallResponse = await new HallService().getHallById(hallId);
+        settings = hallResponse.data || (await HallService.getDefaultHall());
+      } else {
+        settings = await HallService.getDefaultHall();
+      }
+      
+      const now = DateTime.now().setZone('Africa/Lagos');
+      const today = now.startOf('day').toJSDate();
+      
+      const query: any = { date: { $gte: today }, isActive: true };
+      if (hallId) query.hall = hallId;
 
       // Get upcoming events count
-      const upcomingEventsCount = await EventModel.countDocuments({
-        date: { $gte: today },
-        isActive: true,
-      });
+      const upcomingEventsCount = await EventModel.countDocuments(query);
 
       // Get next few events (next 5)
-      const nextEvents = await EventModel.find({
-        date: { $gte: today },
-        isActive: true,
-      })
+      const nextEvents = await EventModel.find(query)
         .sort({ date: 1 })
         .limit(5)
         .lean()
@@ -1258,9 +1627,10 @@ export class BookingService {
       const nextEventsWithStats = await Promise.all(
         nextEvents.map(async (event) => {
           const bookings = await BookingModel.find({
+            hall: event.hall,
             eventDate: {
-              $gte: startOfDay(new Date(event.date)),
-              $lte: endOfDay(new Date(event.date)),
+              $gte: getLagosStartOfDay(event.date),
+              $lte: getLagosEndOfDay(event.date),
             },
             status: { $ne: BookingStatus.Cancelled },
           });
@@ -1356,6 +1726,63 @@ export class BookingService {
         error: error.message,
         data: null,
       };
+    }
+  }
+
+  private async processWaitlist(eventId: string): Promise<void> {
+    try {
+      const event = await EventModel.findById(eventId);
+      if (!event || event.availableSeats <= 0) return;
+
+      const waitlist = await BookingModel.find({
+        event: eventId,
+        status: BookingStatus.Waitlisted,
+      })
+        .sort({ priorityScore: -1, createdAt: 1 })
+        .populate("user");
+
+      for (const wBooking of waitlist) {
+        if (event.availableSeats < wBooking.seatNumbers.length) {
+          continue; // Skip if they requested more seats than what's available
+        }
+
+        const bookedSeats = await BookingModel.find({
+          event: eventId,
+          status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided, BookingStatus.Waitlisted] },
+        }).select("seatNumbers");
+        const allBookedNumbers = bookedSeats.flatMap((b) => b.seatNumbers);
+
+        try {
+          const newSeats = SeatUtils.findNextAvailableSeats(
+            event.totalSeats,
+            allBookedNumbers,
+            wBooking.seatNumbers.length
+          );
+
+          wBooking.status = BookingStatus.Attending;
+          wBooking.seatNumbers = newSeats.numbers;
+          wBooking.seatLabels = newSeats.labels;
+
+          wBooking.qrCode = await this.qrService.generateQRCode(wBooking);
+          await wBooking.save();
+
+          event.availableSeats -= wBooking.seatNumbers.length;
+          await event.save();
+
+          await this.notificationService.sendWaitlistApprovedEmail(
+            wBooking.user as any,
+            wBooking
+          );
+
+          logger.info(`Waitlisted booking ${wBooking.ticketId} automatically approved due to seat cancellation.`);
+          
+          if (event.availableSeats <= 0) break;
+        } catch (err) {
+          logger.error(`Failed to assign seat to waitlist ${wBooking.ticketId}`, err);
+        }
+      }
+    } catch (err) {
+      logger.error("Error auto-processing waitlist:", err);
     }
   }
 }

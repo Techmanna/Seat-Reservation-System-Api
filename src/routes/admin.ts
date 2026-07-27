@@ -1,9 +1,11 @@
 import { Router } from "express";
+import mongoose from "mongoose";
 import { UserModel } from "../models/User";
 import { EventModel } from "../models/Event";
 import { BookingModel } from "../models/Booking";
+import { SubscriptionModel } from "../models/Subscription";
 import { NotificationService } from "../services/NotificationService";
-import { startOfDay, endOfDay, subDays, isBefore, isAfter } from "date-fns";
+import { startOfDay, endOfDay, subDays, isBefore, isAfter, differenceInCalendarDays, addDays } from "date-fns";
 import { validateRequest } from "../middleware/validateRequest";
 import { getAllBookingsSchema, ticketIdParamsSchema } from "../dtos/index.dto";
 import { ApiResponse, BookingStatus, User } from "../types";
@@ -16,6 +18,222 @@ const notificationService = new NotificationService();
 const bookingService = new BookingService();
 const settingsService = new SettingsService();
 const eventService = new EventService();
+
+/**
+ * @swagger
+ * /admin/revenue:
+ *   get:
+ *     summary: Aggregate administrative tier metrics
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Yields complete business logic states
+ */
+router.get("/revenue/export", async (req, res) => {
+  try {
+    // Note: Population assumes the 'user' field exists and references the User collection
+    const subscriptions = await SubscriptionModel.find().lean().populate('user');
+    
+    const exportData = subscriptions.map((sub: any) => ({
+      email: sub.email || (sub.user ? sub.user.email : ""),
+      plan: sub.plan || "",
+      status: sub.status || "",
+      provider: sub.provider || "",
+      providerSubscriptionId: sub.providerSubscriptionId || "",
+      currentPeriodStart: sub.currentPeriodStart ? new Date(sub.currentPeriodStart).toISOString() : "",
+      currentPeriodEnd: sub.currentPeriodEnd ? new Date(sub.currentPeriodEnd).toISOString() : "",
+      createdAt: sub.createdAt ? new Date(sub.createdAt).toISOString() : ""
+    }));
+
+    res.json({
+      success: true,
+      message: "Transactions exported successfully",
+      data: exportData
+    });
+  } catch (error: any) {
+    console.error("Export transactions error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to export transactions",
+      error: error.message
+    });
+  }
+});
+
+router.get("/revenue", async (req, res) => {
+  try {
+    const today = new Date();
+    const range = (req.query.range as string) || '30d';
+
+    // Pricing definitions (NGN values converted to USD equivalent for unified MRR)
+    const pricing: Record<string, { amount: number; amountNgn: number; currency: string }> = {
+      '₦2,500':  { amount: 2500  / 1500, amountNgn: 2500,  currency: 'NGN' },
+      '₦6,500':  { amount: 6500  / 1500, amountNgn: 6500,  currency: 'NGN' },
+      '₦70,000': { amount: 70000 / 1500, amountNgn: 70000, currency: 'NGN' },
+      '$2':  { amount: 2,  amountNgn: 2  * 1500, currency: 'USD' },
+      '$5':  { amount: 5,  amountNgn: 5  * 1500, currency: 'USD' },
+      '$50': { amount: 50, amountNgn: 50 * 1500, currency: 'USD' },
+    };
+
+    // Date range resolution
+    let startDate: Date;
+    let previousStartDate: Date;
+    let trendDays: number; // how many daily buckets to generate
+
+    switch (range) {
+      case 'today':
+        startDate = startOfDay(today);
+        previousStartDate = startOfDay(subDays(today, 1));
+        trendDays = 1;
+        break;
+      case '7d':
+        startDate = subDays(today, 7);
+        previousStartDate = subDays(today, 14);
+        trendDays = 7;
+        break;
+      case '90d':
+        startDate = subDays(today, 90);
+        previousStartDate = subDays(today, 180);
+        trendDays = 90;
+        break;
+      case 'YTD':
+        startDate = new Date(today.getFullYear(), 0, 1);
+        previousStartDate = new Date(today.getFullYear() - 1, 0, 1);
+        trendDays = differenceInCalendarDays(today, startDate) + 1;
+        break;
+      case '30d':
+      default:
+        startDate = subDays(today, 30);
+        previousStartDate = subDays(today, 60);
+        trendDays = 30;
+        break;
+    }
+
+    // Fetch all active subs once
+    const allActiveSubs = await SubscriptionModel.find({ status: 'active' }).lean();
+
+    const currentSubs  = allActiveSubs.filter(s => s.createdAt && s.createdAt >= startDate);
+    const previousSubs = allActiveSubs.filter(s => s.createdAt && s.createdAt >= previousStartDate && s.createdAt < startDate);
+
+    // MRR calculation (USD)
+    const sumUsd = (subs: typeof allActiveSubs) =>
+      subs.reduce((acc, s) => acc + (pricing[s.tier]?.amount ?? 0), 0);
+
+    const currentMrr  = sumUsd(currentSubs);
+    const previousMrr = sumUsd(previousSubs);
+    const mrrDiff       = currentMrr - previousMrr;
+    const mrrPct        = previousMrr > 0 ? (mrrDiff / previousMrr) * 100 : 0;
+
+    const subDiff = currentSubs.length - previousSubs.length;
+    const subPct  = previousSubs.length > 0 ? (subDiff / previousSubs.length) * 100 : 0;
+
+    // ARPU
+    const arpu = currentSubs.length > 0 ? currentMrr / currentSubs.length : 0;
+
+    // Churn = cancelled in window / total at start of window
+    const cancelledInRange = await SubscriptionModel.countDocuments({
+      status: 'cancelled',
+      updatedAt: { $gte: startDate }
+    });
+    const totalAtStart = await SubscriptionModel.countDocuments({
+      createdAt: { $lt: startDate },
+      status: { $in: ['active', 'cancelled'] }
+    });
+    const churnRate = totalAtStart > 0 ? (cancelledInRange / totalAtStart) * 100 : 0;
+
+    // Region breakdown — use stored `provider` & `timezone` (no random)
+    const NIGERIA_TZ  = ['Africa/Lagos', 'Africa/Abuja'];
+    const UK_TZ_PREFIX = ['Europe/'];
+    const US_TZ_PREFIX = ['America/'];
+    const regions = { nigeriaPaystack: 0, usaUkStripe: 0, restOfWorldStripe: 0 };
+
+    currentSubs.forEach(sub => {
+      if (sub.provider === 'paystack') {
+        regions.nigeriaPaystack++;
+      } else {
+        const tz = sub.timezone || '';
+        if (NIGERIA_TZ.includes(tz) || US_TZ_PREFIX.some(p => tz.startsWith(p)) || UK_TZ_PREFIX.some(p => tz.startsWith(p))) {
+          regions.usaUkStripe++;
+        } else {
+          regions.restOfWorldStripe++;
+        }
+      }
+    });
+
+    const totalReg = regions.nigeriaPaystack + regions.usaUkStripe + regions.restOfWorldStripe || 1;
+
+    // Tier counts (all active, not just in range)
+    const tierCounts = { monthly: 0, annual: 0, weekly: 0 };
+    allActiveSubs.forEach(sub => {
+      if (sub.tier.includes('2,500') || sub.tier.includes('$2'))  tierCounts.weekly++;
+      else if (sub.tier.includes('6,500') || sub.tier.includes('$5'))   tierCounts.monthly++;
+      else if (sub.tier.includes('70,000') || sub.tier.includes('$50')) tierCounts.annual++;
+    });
+    const totalTiers = tierCounts.weekly + tierCounts.monthly + tierCounts.annual || 1;
+
+    // Daily revenue trend — current period vs previous period (USD)
+    // Bucket daily: for each day in [0..trendDays-1] count revenue from subs created that day
+    const buildDailyTrend = (periodStart: Date, days: number) => {
+      return Array.from({ length: days }, (_, i) => {
+        const day = startOfDay(addDays(periodStart, i));
+        const next = startOfDay(addDays(periodStart, i + 1));
+        const dayRevenue = allActiveSubs
+          .filter(s => s.createdAt && s.createdAt >= day && s.createdAt < next)
+          .reduce((acc, s) => acc + (pricing[s.tier]?.amount ?? 0), 0);
+        return {
+          date: day.toISOString().slice(0, 10),
+          revenue: Math.round(dayRevenue * 100) / 100
+        };
+      });
+    };
+
+    const currentTrend  = buildDailyTrend(startDate,         trendDays);
+    const previousTrend = buildDailyTrend(previousStartDate, trendDays);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        range,
+        metrics: {
+          mrr: {
+            total: Math.round(currentMrr * 100) / 100,
+            percentage: Math.abs(Math.round(mrrPct * 10) / 10),
+            trend: mrrDiff >= 0 ? 'up' : 'down'
+          },
+          activeSubs: {
+            total: currentSubs.length,
+            delta: subDiff,
+            percentage: Math.abs(Math.round(subPct * 10) / 10),
+            trend: subDiff >= 0 ? 'up' : 'down'
+          },
+          arpu: Math.round(arpu * 100) / 100,
+          churnRate: Math.round(churnRate * 10) / 10,
+        },
+        byRegion: {
+          nigeriaPaystack: Math.round((regions.nigeriaPaystack / totalReg) * 100),
+          usaUkStripe:     Math.round((regions.usaUkStripe     / totalReg) * 100),
+          restOfWorldStripe: Math.round((regions.restOfWorldStripe / totalReg) * 100),
+        },
+        byTier: {
+          weekly:  { count: tierCounts.weekly,  pct: Math.round((tierCounts.weekly  / totalTiers) * 100) },
+          monthly: { count: tierCounts.monthly, pct: Math.round((tierCounts.monthly / totalTiers) * 100) },
+          annual:  { count: tierCounts.annual,  pct: Math.round((tierCounts.annual  / totalTiers) * 100) },
+        },
+        totalActiveCount: allActiveSubs.length,
+        trend: {
+          current:  currentTrend,
+          previous: previousTrend,
+        }
+      }
+    });
+
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || "Internal error" });
+  }
+});
+
 
 // Get dashboard statistics
 // router.get('/dashboard/stats', async (req, res) => {
@@ -337,64 +555,97 @@ router.get("/dashboard/upcoming-events", async (req, res) => {
 // Get all dashboard data in one request (optional - for better performance)
 router.get("/dashboard/all", async (req, res) => {
   try {
-    const today = new Date();
-    const yesterday = subDays(today, 1);
-    const startOfToday = startOfDay(today);
-    const endOfToday = endOfDay(today);
-    const startOfYesterday = startOfDay(yesterday);
-    const endOfYesterday = endOfDay(yesterday);
+    const { startDate, endDate, hallId } = req.query;
+
+    let rangeStart: Date;
+    let rangeEnd: Date;
+    let comparisonStart: Date;
+    let comparisonEnd: Date;
+    let isCustomRange = false;
+
+    if (startDate && endDate) {
+      rangeStart = startOfDay(new Date(startDate as string));
+      rangeEnd = endOfDay(new Date(endDate as string));
+      isCustomRange = true;
+
+      // Calculate duration in days for the comparison period
+      const duration = differenceInCalendarDays(rangeEnd, rangeStart) + 1;
+      comparisonStart = startOfDay(subDays(rangeStart, duration));
+      comparisonEnd = endOfDay(subDays(rangeEnd, duration));
+    } else {
+      const today = new Date();
+      const yesterday = subDays(today, 1);
+      rangeStart = startOfDay(today);
+      rangeEnd = endOfDay(today);
+      comparisonStart = startOfDay(yesterday);
+      comparisonEnd = endOfDay(yesterday);
+    }
+
+    const today = new Date(); // still needed for upcoming events reference
+
+    const periodQuery: any = {
+      createdAt: { $gte: rangeStart, $lte: rangeEnd },
+      status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+    };
+    const previousPeriodQuery: any = {
+      createdAt: { $gte: comparisonStart, $lte: comparisonEnd },
+      status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+    };
+    const confirmedQuery: any = { status: "confirmed" };
+    const checkedInQuery: any = { status: "checked-in" };
+    const eventQuery: any = { date: { $gte: today }, isActive: true };
+
+    if (hallId && hallId !== "all") {
+      const hallObjId = new mongoose.Types.ObjectId(hallId as string);
+      periodQuery.hall = hallObjId;
+      previousPeriodQuery.hall = hallObjId;
+      confirmedQuery.hall = hallObjId;
+      checkedInQuery.hall = hallObjId;
+      eventQuery.hall = hallObjId;
+    }
 
     // Get all data in parallel
     const [
-      todayRegistrations,
-      yesterdayRegistrations,
+      periodRegistrations,
+      previousPeriodRegistrations,
       totalConfirmed,
       checkedIn,
       upcomingEvents,
-      todayBookings,
+      periodBookings,
     ] = await Promise.all([
-      BookingModel.countDocuments({
-        createdAt: { $gte: startOfToday, $lte: endOfToday },
-        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-      }),
-      BookingModel.countDocuments({
-        createdAt: { $gte: startOfYesterday, $lte: endOfYesterday },
-        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-      }),
-      BookingModel.countDocuments({ status: "confirmed" }),
-      BookingModel.countDocuments({ status: "checked-in" }),
-      EventModel.find({
-        date: { $gte: today },
-        isActive: true,
-      })
+      BookingModel.countDocuments(periodQuery),
+      BookingModel.countDocuments(previousPeriodQuery),
+      BookingModel.countDocuments(confirmedQuery),
+      BookingModel.countDocuments(checkedInQuery),
+      EventModel.find(eventQuery)
         .sort({ date: 1 })
         .limit(4),
-      BookingModel.find({
-        createdAt: { $gte: startOfToday, $lte: endOfToday },
-        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-      }).populate("user", "name email gender ageRange"),
+      BookingModel.find(periodQuery).populate("user", "name email gender ageRange"),
     ]);
 
     // Calculate trend
     const trendPercentage =
-      yesterdayRegistrations > 0
+      previousPeriodRegistrations > 0
         ? Math.round(
-            ((todayRegistrations - yesterdayRegistrations) /
-              yesterdayRegistrations) *
+            ((periodRegistrations - previousPeriodRegistrations) /
+              previousPeriodRegistrations) *
               100
           )
         : 0;
 
-    // Get user IDs from today's bookings
-    const userIds = todayBookings.map((booking) => {
-      // If user is populated (User object), use its _id, otherwise use the ObjectId directly
-      return typeof booking.user === "object" && "email" in booking.user
-        ? booking.user._id
-        : booking.user;
-    });
+    // Get user IDs from period's bookings
+    const userIds = periodBookings
+      .map((booking) => {
+        // If user is populated (User object), use its _id, otherwise use the ObjectId directly
+        if (!booking.user) return null;
+        return typeof booking.user === "object" && "email" in booking.user
+          ? (booking.user as any)._id
+          : booking.user;
+      })
+      .filter((id) => id !== null);
 
-    // Get demographics in parallel
-    const [genderStats, ageStats] = await Promise.all([
+    // Get demographics and loyalty in parallel
+    const [genderStats, ageStats, loyaltyData] = await Promise.all([
       UserModel.aggregate([
         { $match: { _id: { $in: userIds } } },
         { $group: { _id: "$gender", count: { $sum: 1 } } },
@@ -403,7 +654,37 @@ router.get("/dashboard/all", async (req, res) => {
         { $match: { _id: { $in: userIds } } },
         { $group: { _id: "$ageRange", count: { $sum: 1 } } },
       ]),
+      // Aggregation for loyalty distribution among active users in the selected period
+      BookingModel.aggregate([
+        { 
+          $match: { 
+            user: { $in: userIds },
+            status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] }
+          } 
+        },
+        { $group: { _id: "$user", visitCount: { $sum: 1 } } },
+        {
+          $facet: {
+            buckets: [
+              {
+                $bucket: {
+                  groupBy: "$visitCount",
+                  boundaries: [1, 2, 6, 11, 31],
+                  default: "31+",
+                  output: { count: { $sum: 1 } }
+                }
+              }
+            ],
+            totals: [
+              { $match: { visitCount: { $gt: 1 } } },
+              { $group: { _id: null, totalRepeatedVisits: { $sum: "$visitCount" }, repeatUserCount: { $sum: 1 } } }
+            ]
+          }
+        }
+      ]),
     ]);
+
+    const loyaltyStatsRaw = loyaltyData[0];
 
     // Get booking counts for events
     const eventsWithBookings = await Promise.all(
@@ -422,7 +703,7 @@ router.get("/dashboard/all", async (req, res) => {
           time: event.time,
           total_seats: event.totalSeats,
           bookedSeats: bookedSeatCount,
-          availableSeats: event.totalSeats - bookedSeatCount,
+          availableSeats: (event.totalSeats || 0) - bookedSeatCount,
           totalBookings: bookings.length,
         };
       })
@@ -430,33 +711,74 @@ router.get("/dashboard/all", async (req, res) => {
 
     // Format demographics data
     const formattedGenderStats = genderStats.map((stat) => ({
-      gender: stat._id.charAt(0).toUpperCase() + stat._id.slice(1),
+      gender: stat._id ? stat._id.charAt(0).toUpperCase() + stat._id.slice(1) : "Unknown",
       count: stat.count,
     }));
 
-    const formattedAgeStats = ageStats.map((stat) => ({
-      ageGroup: stat._id,
-      count: stat.count,
-    }));
+    const ageOrder = ["18-25", "26-35", "36-45", "46-55", "55+"];
+    const formattedAgeStats = ageOrder.map((group) => {
+      const stat = ageStats.find((s) => s._id === group);
+      return {
+        ageGroup: group,
+        count: stat ? stat.count : 0,
+      };
+    });
+
+    // Add "Unknown" at the end if there are any unmatched groups
+    const otherAges = ageStats
+      .filter((s) => s._id && !ageOrder.includes(s._id))
+      .map((s) => ({ ageGroup: s._id as string, count: s.count }));
+    
+    if (otherAges.length > 0) {
+      formattedAgeStats.push(...otherAges);
+    }
+    
+    const unknownStat = ageStats.find((s) => !s._id);
+    if (unknownStat) {
+      formattedAgeStats.push({ ageGroup: "Unknown", count: unknownStat.count });
+    }
+
+    // Map bucket boundaries to friendly labels
+    const bucketLabels: Record<string, string> = {
+      "1": "New (1)",
+      "2": "Returning (2-5)",
+      "6": "Regular (6-10)",
+      "11": "Loyal (11-30)",
+      "31+": "VIP (>30)"
+    };
+
+    const formattedLoyaltyStats = [1, 2, 6, 11, "31+"].map((boundary) => {
+      const bucket = loyaltyStatsRaw.buckets.find((b: any) => b._id === boundary);
+      return {
+        category: bucketLabels[boundary.toString()],
+        count: bucket ? bucket.count : 0
+      };
+    });
+
+    const repeatMetrics = loyaltyStatsRaw.totals[0] || { totalRepeatedVisits: 0, repeatUserCount: 0 };
+
+    const comparisonText = isCustomRange ? "vs previous period" : "vs yesterday";
 
     res.json({
       success: true,
       message: "All dashboard data retrieved successfully",
       data: {
         overview: {
-          todayRegistrations,
+          todayRegistrations: periodRegistrations, // Keeping key for compatibility
           totalConfirmed,
           checkedIn,
           upcomingEventsCount: upcomingEvents.length,
           trend:
             trendPercentage >= 0
-              ? `+${trendPercentage}% vs yesterday`
-              : `${trendPercentage}% vs yesterday`,
+              ? `+${trendPercentage}% ${comparisonText}`
+              : `${trendPercentage}% ${comparisonText}`,
         },
         genderStats: formattedGenderStats,
         ageStats: formattedAgeStats,
+        loyaltyStats: formattedLoyaltyStats,
+        repeatMetrics,
         upcomingEvents: eventsWithBookings,
-        todayRegistrations: todayBookings,
+        todayRegistrations: periodBookings, // Keeping key for compatibility
       },
     });
   } catch (error: any) {
@@ -472,14 +794,15 @@ router.get("/dashboard/all", async (req, res) => {
 // Get the next event
 router.get("/next-event", async (req, res) => {
   try {
-    const event = await EventModel.findOne({ isActive: true })
+    const event = await EventModel.findOne({ isActive: true, date: { $gte: new Date() } })
       .sort({ date: 1 })
       .lean();
 
     if (!event) {
-      res.status(404).json({
-        success: false,
+      res.status(200).json({
+        success: true,
         message: "No active events found",
+        data: null,
       });
       return;
     }
@@ -512,6 +835,7 @@ router.get("/registrations", async (req, res) => {
       ageGroup,
       eventDate,
       status,
+      hallId,
       page = 1,
       limit = 50,
       sortBy = "createdAt",
@@ -538,6 +862,11 @@ router.get("/registrations", async (req, res) => {
       matchQuery.eventDate = { $gte: startOfEventDate, $lte: endOfEventDate };
     }
 
+    // Hall filter
+    if (hallId && hallId !== "all") {
+      matchQuery.hall = new mongoose.Types.ObjectId(hallId as string);
+    }
+
     // Build aggregation pipeline
     const pipeline: any[] = [
       { $match: matchQuery },
@@ -557,8 +886,17 @@ router.get("/registrations", async (req, res) => {
           as: "eventInfo",
         },
       },
+      {
+        $lookup: {
+          from: "halls",
+          localField: "hall",
+          foreignField: "_id",
+          as: "hall",
+        },
+      },
       { $unwind: "$userInfo" },
       { $unwind: "$eventInfo" },
+      { $unwind: { path: "$hall", preserveNullAndEmptyArrays: true } },
     ];
 
     // Add user-based filters
@@ -633,6 +971,10 @@ router.get("/registrations", async (req, res) => {
           time: "$eventInfo.time",
           totalSeats: "$eventInfo.totalSeats",
         },
+        hall: {
+          _id: "$hall._id",
+          name: "$hall.name"
+        }
       },
     });
 
@@ -714,18 +1056,24 @@ router.get("/registrations/event-dates", async (req, res) => {
 // Get registration statistics
 router.get("/registrations/stats", async (req, res) => {
   try {
-    const [totalCount, statusStats, genderStats, ageStats] = await Promise.all([
+    const { hallId } = req.query;
+
+    const baseMatch: any = {
+      status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+    };
+
+    if (hallId && hallId !== "all") {
+      baseMatch.hall = new mongoose.Types.ObjectId(hallId as string);
+    }
+
+    const [totalCount, statusStats, genderStats, ageStats, hallStats] = await Promise.all([
       // Total registrations (excluding cancelled)
-      BookingModel.countDocuments({
-        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-      }),
+      BookingModel.countDocuments(baseMatch),
 
       // Status distribution
       BookingModel.aggregate([
         {
-          $match: {
-            status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-          },
+          $match: baseMatch,
         },
         { $group: { _id: "$status", count: { $sum: 1 } } },
       ]),
@@ -733,9 +1081,7 @@ router.get("/registrations/stats", async (req, res) => {
       // Gender distribution
       BookingModel.aggregate([
         {
-          $match: {
-            status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-          },
+          $match: baseMatch,
         },
         {
           $lookup: {
@@ -757,9 +1103,7 @@ router.get("/registrations/stats", async (req, res) => {
       // Age group distribution
       BookingModel.aggregate([
         {
-          $match: {
-            status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-          },
+          $match: baseMatch,
         },
         {
           $lookup: {
@@ -777,6 +1121,30 @@ router.get("/registrations/stats", async (req, res) => {
           },
         },
       ]),
+
+      // Hall distribution (unfiltered by hallId so we always see all halls)
+      BookingModel.aggregate([
+        {
+          $match: {
+            status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+          },
+        },
+        {
+          $lookup: {
+            from: "halls",
+            localField: "hall",
+            foreignField: "_id",
+            as: "hallInfo",
+          },
+        },
+        { $unwind: { path: "$hallInfo", preserveNullAndEmptyArrays: true } },
+        {
+          $group: {
+            _id: { id: "$hallInfo._id", name: "$hallInfo.name" },
+            count: { $sum: 1 },
+          },
+        },
+      ]),
     ]);
 
     res.json({
@@ -789,10 +1157,15 @@ router.get("/registrations/stats", async (req, res) => {
           count: s.count,
         })),
         genderStats: genderStats.map((g) => ({
-          gender: g._id.charAt(0).toUpperCase() + g._id.slice(1),
+          gender: g._id ? g._id.charAt(0).toUpperCase() + g._id.slice(1) : 'Unknown',
           count: g.count,
         })),
-        ageStats: ageStats.map((a) => ({ ageGroup: a._id, count: a.count })),
+        ageStats: ageStats.map((a) => ({ ageGroup: a._id || 'Unknown', count: a.count })),
+        hallStats: hallStats.map((h) => ({
+          hallId: h._id.id || null,
+          hallName: h._id.name || 'Unassigned',
+          count: h.count
+        }))
       },
     });
   } catch (error: any) {
@@ -999,44 +1372,46 @@ router.post("/registrations/bulk-action", async (req, res) => {
       return;
     }
 
-    let updateData = {};
-    let message = "";
-
-    switch (action) {
-      case "void":
-        updateData = { status: BookingStatus.Voided };
-        message = `${registrationIds.length} registrations voided successfully`;
-        break;
-      case "confirm":
-        updateData = { status: BookingStatus.Attending };
-        message = `${registrationIds.length} registrations confirmed successfully`;
-        break;
-      case "checkin":
-        updateData = { status: BookingStatus.Attended };
-        message = `${registrationIds.length} registrations checked-in successfully`;
-        break;
-      default:
-        res.status(400).json({
-          success: false,
-          message: "Invalid bulk action",
-        });
-        return;
+    let modifiedCount = 0;
+    
+    for (const id of registrationIds) {
+      const registration = await BookingModel.findById(id);
+      if (!registration) continue;
+      
+      const isVoidOrCancelled = registration.status === BookingStatus.Voided || registration.status === BookingStatus.Cancelled;
+      const seatCount = registration.seatNumbers ? registration.seatNumbers.length : 0;
+      
+      if (action === "void" && !isVoidOrCancelled) {
+         await BookingModel.findByIdAndUpdate(id, { status: BookingStatus.Voided });
+         if (seatCount > 0) {
+            await EventModel.findByIdAndUpdate(registration.event, {
+              $inc: { availableSeats: seatCount },
+            });
+         }
+         modifiedCount++;
+      } else if (action === "delete") {
+         if (!isVoidOrCancelled && seatCount > 0) {
+            await EventModel.findByIdAndUpdate(registration.event, {
+              $inc: { availableSeats: seatCount },
+            });
+         }
+         await BookingModel.findByIdAndDelete(id);
+         modifiedCount++;
+      } else if (action === "confirm" && registration.status !== BookingStatus.Attending) {
+         await BookingModel.findByIdAndUpdate(id, { status: BookingStatus.Attending });
+         modifiedCount++;
+      } else if (action === "checkin" && registration.status !== BookingStatus.Attended) {
+         await BookingModel.findByIdAndUpdate(id, { status: BookingStatus.Attended, attendedAt: new Date() });
+         modifiedCount++;
+      }
     }
-
-    const result = await BookingModel.updateMany(
-      {
-        _id: { $in: registrationIds },
-        status: { $ne: BookingStatus.Voided }, // Don't update already voided registrations
-      },
-      updateData
-    );
 
     res.json({
       success: true,
-      message,
+      message: `${modifiedCount} registrations processed successfully`,
       data: {
-        modifiedCount: result.modifiedCount,
-        matchedCount: result.matchedCount,
+        modifiedCount,
+        matchedCount: registrationIds.length,
       },
     });
   } catch (error: any) {
@@ -1049,18 +1424,104 @@ router.post("/registrations/bulk-action", async (req, res) => {
   }
 });
 
+// Bulk delete by date range
+router.post("/registrations/bulk-delete-by-date", async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+    return;
+    if (!startDate || !endDate) {
+      res.status(400).json({ success: false, message: "Start date and end date are required" });
+      return;
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+    
+    const bookings = await BookingModel.find({
+      eventDate: { $gte: start, $lte: end }
+    });
+
+    // Calculate how many seats to restore per event
+    const eventCapacityIncrements: Record<string, number> = {};
+
+    for (const registration of bookings) {
+      const isVoidOrCancelled = registration.status === BookingStatus.Voided || registration.status === BookingStatus.Cancelled;
+      const seatCount = registration.seatNumbers ? registration.seatNumbers.length : 0;
+      
+      if (!isVoidOrCancelled && seatCount > 0) {
+        const eventId = registration.event.toString();
+        if (!eventCapacityIncrements[eventId]) {
+          eventCapacityIncrements[eventId] = 0;
+        }
+        eventCapacityIncrements[eventId] += seatCount;
+      }
+    }
+
+    // Bulk update event capacities concurrently
+    const updatePromises = Object.keys(eventCapacityIncrements).map(eventId => {
+      return EventModel.findByIdAndUpdate(eventId, {
+        $inc: { availableSeats: eventCapacityIncrements[eventId] }
+      });
+    });
+    await Promise.all(updatePromises);
+
+    // Perform a single bulk delete operation for all matching bookings
+    const result = await BookingModel.deleteMany({
+      eventDate: { $gte: start, $lte: end }
+    });
+
+    res.json({
+      success: true,
+      message: `Successfully deleted ${result.deletedCount} bookings within the specified date range`,
+      data: { modifiedCount: result.deletedCount }
+    });
+  } catch (error: any) {
+    console.error("Bulk delete by date error:", error);
+    res.status(500).json({ success: false, message: "Failed to delete bookings", error: error.message });
+  }
+});
+
+// Delete single registration
+router.delete("/registrations/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const registration = await BookingModel.findById(id);
+    if (!registration) {
+      res.status(404).json({ success: false, message: "Registration not found" });
+      return;
+    }
+    
+    const isVoidOrCancelled = registration.status === BookingStatus.Voided || registration.status === BookingStatus.Cancelled;
+    const seatCount = registration.seatNumbers ? registration.seatNumbers.length : 0;
+    
+    if (!isVoidOrCancelled && seatCount > 0) {
+      await EventModel.findByIdAndUpdate(registration.event, {
+        $inc: { availableSeats: seatCount },
+      });
+    }
+    
+    await BookingModel.findByIdAndDelete(id);
+    res.json({ success: true, message: "Registration deleted successfully" });
+  } catch (error: any) {
+    console.error("Delete registration error:", error);
+    res.status(500).json({ success: false, message: "Failed to delete registration", error: error.message });
+  }
+});
+
 router.get(
   "/bookings",
   validateRequest(getAllBookingsSchema),
   async (req, res) => {
     try {
-      const { page = "1", limit = "10", search = "", status } = req.query;
+      const { page = "1", limit = "10", search = "", status, hallId } = req.query;
 
       const result = await bookingService.getAllBookings({
         page: parseInt(page as string, 10),
         limit: parseInt(limit as string, 10),
         search: search as string,
         status: status as BookingStatus,
+        hallId: hallId as string,
       });
 
       res.status(200).json(result);
@@ -1406,10 +1867,12 @@ router.post("/notifications/preview", async (req, res) => {
 // Get all events
 router.get("/events", async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10, status, timeframe = 'upcoming' } = req.query;
     const result = await eventService.getEvents({
       page: parseInt(page as string, 10),
       limit: parseInt(limit as string, 10),
+      status: status as string,
+      timeframe: timeframe as string
     });
     res.status(200).json(result);
   } catch (error: any) {
@@ -1494,4 +1957,146 @@ router.delete("/events/:eventId", async (req, res) => {
   }
 });
 
+// ==========================================
+// USER MANAGEMENT ENDPOINTS
+// ==========================================
+
+// Get all users (paginated and filtered)
+router.get("/users", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const search = (req.query.search as string) || "";
+    
+    const skip = (page - 1) * limit;
+
+    // Build the match stage
+    const matchStage: any = {};
+    if (search) {
+      matchStage.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Get total count for pagination
+    const totalResult = await UserModel.aggregate([
+      { $match: matchStage },
+      { $count: 'total' }
+    ]);
+    const total = totalResult.length > 0 ? totalResult[0].total : 0;
+    const totalPages = Math.ceil(total / limit);
+
+    const users = await UserModel.aggregate([
+      { $match: matchStage },
+      { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limit },
+      {
+        $lookup: {
+          from: 'bookings',
+          localField: '_id',
+          foreignField: 'user',
+          as: 'bookings'
+        }
+      },
+      {
+        $addFields: {
+          bookingCount: { $size: '$bookings' },
+          id: { $toString: '$_id' }
+        }
+      },
+      {
+        $project: {
+          bookings: 0,
+          password: 0,
+          verificationOtp: 0,
+          resetPasswordToken: 0
+        }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      message: "Users retrieved successfully",
+      data: {
+        users,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages
+        }
+      }
+    });
+  } catch (error: any) {
+    console.error("Get users error:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch users", error: error.message });
+  }
+});
+
+// Delete user and cascade their bookings
+router.delete("/users/:id", async (req, res) => {
+  console.log("DELETE /users/:id HIT with ID:", req.params.id);
+  try {
+    const { id } = req.params;
+    
+    // Check if user exists
+    const user = await UserModel.findById(id);
+    if (!user) {
+      console.log("User not found in DB for ID:", id);
+      res.status(400).json({ success: false, message: "User not found in database. Please refresh the page." });
+      return;
+    }
+
+    // Find all bookings for this user to restore seats
+    const userBookings = await BookingModel.find({ user: id });
+    
+    // Calculate how many seats to restore per event
+    const eventCapacityIncrements: Record<string, number> = {};
+
+    for (const registration of userBookings) {
+      const isVoidOrCancelled = registration.status === BookingStatus.Voided || registration.status === BookingStatus.Cancelled;
+      const seatCount = registration.seatNumbers ? registration.seatNumbers.length : 0;
+      
+      if (!isVoidOrCancelled && seatCount > 0) {
+        const eventId = registration.event.toString();
+        if (!eventCapacityIncrements[eventId]) {
+          eventCapacityIncrements[eventId] = 0;
+        }
+        eventCapacityIncrements[eventId] += seatCount;
+      }
+    }
+
+    // Bulk update event capacities concurrently
+    const updatePromises = Object.keys(eventCapacityIncrements).map(eventId => {
+      return EventModel.findByIdAndUpdate(eventId, {
+        $inc: { availableSeats: eventCapacityIncrements[eventId] }
+      });
+    });
+    await Promise.all(updatePromises);
+
+    // Delete bookings
+    await BookingModel.deleteMany({ user: id });
+    
+    // Delete subscription (if any)
+    const { SubscriptionModel } = await import('../models/Subscription'); // dynamic import if missing, wait let's check if it is imported at top
+    await SubscriptionModel.deleteMany({ userId: id });
+
+    // Finally, delete the user
+    await UserModel.findByIdAndDelete(id);
+
+    res.json({
+      success: true,
+      message: "User and associated data deleted successfully"
+    });
+
+  } catch (error: any) {
+    console.error("Delete user error:", error);
+    res.status(500).json({ success: false, message: "Failed to delete user", error: error.message });
+  }
+});
+
 export default router;
+

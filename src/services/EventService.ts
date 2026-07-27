@@ -4,15 +4,36 @@ import { ApiResponse, Event } from "../types";
 import { endOfDay, startOfDay } from "date-fns";
 
 export class EventService {
-    async getEvents({ page = 1, limit = 10 }: { page?: number, limit?: number } = {}): Promise<ApiResponse<Event[]>> {
+    async getEvents({ page = 1, limit = 10, status, timeframe = 'upcoming' }: { page?: number, limit?: number, status?: string, timeframe?: string } = {}): Promise<ApiResponse<Event[]>> {
         const skip = (page - 1) * limit;
+        
+        let query: any = {};
+        if (status === 'confirmed') {
+            query = { isActive: true, zoomMeetingUrl: { $ne: null } };
+        } else if (status === 'open') {
+            query = { isActive: true, zoomMeetingUrl: null };
+        } else if (status === 'draft') {
+            query = { isActive: false };
+        }
+
+        const today = startOfDay(new Date());
+        let sortOrder: any = { date: -1 };
+
+        if (timeframe === 'upcoming') {
+            query.date = { $gte: today };
+            sortOrder = { date: 1 }; // ascending for upcoming
+        } else if (timeframe === 'past') {
+            query.date = { $lt: today };
+            sortOrder = { date: -1 }; // descending for past
+        }
+
         const [events, total] = await Promise.all([
-            EventModel.find()
-                .sort({ date: -1 })
+            EventModel.find(query)
+                .sort(sortOrder)
                 .skip(skip)
                 .limit(limit)
                 .lean(),
-            EventModel.countDocuments()
+            EventModel.countDocuments(query)
         ]);
         const eventsWithStats = await Promise.all(events.map(async (event) => {
             const bookings = await BookingModel.find({ eventDate: event.date }).lean();

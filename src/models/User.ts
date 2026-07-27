@@ -17,21 +17,71 @@ const userSchema = new Schema<User>({
     },
     phone: {
         type: String,
-        required: true,
+        required: false,
+        trim: true
+    },
+    country: {
+        type: String,
+        required: false,
         trim: true
     },
     gender: {
         type: String,
-        required: true,
+        required: false,
         enum: ['male', 'female', 'other']
     },
     ageRange: {
         type: String,
-        required: true,
+        required: false,
         enum: ['18-25', '26-35', '36-45', '46-55', '55+']
+    },
+    password: {
+        type: String,
+        required: false 
+    },
+    googleId: {
+        type: String,
+        required: false,
+        unique: true,
+        sparse: true 
+    },
+    authProvider: {
+        type: String,
+        enum: ['local', 'google'],
+        default: 'local'
+    },
+    isVerified: {
+        type: Boolean,
+        default: false
+    },
+    verificationOtp: {
+        type: String,
+        default: null
+    },
+    verificationOtpExpiry: {
+        type: Date,
+        default: null
+    },
+    resetPasswordToken: {
+        type: String,
+        default: null
+    },
+    resetPasswordExpiry: {
+        type: Date,
+        default: null
     }
 }, {
-    timestamps: true
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+});
+
+// Virtual: fetch the subscription linked to this user
+userSchema.virtual('subscription', {
+    ref: 'Subscription',
+    localField: '_id',
+    foreignField: 'userId',
+    justOne: true   // One active subscription per user
 });
 
 // Only keep index for non-unique field

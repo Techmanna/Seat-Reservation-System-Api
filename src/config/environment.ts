@@ -22,6 +22,15 @@ export const config = {
         from: process.env.MAIL_FROM,
     },
 
+    sms: {
+        termii: {
+           baseUrl: process.env.TERMII_BASE_URL!,
+           apiKey: process.env.TERMII_API_KEY!,
+           senderName: process.env.TERMII_SENDER_NAME!,
+           channel: process.env.TERMII_CHANNEL!
+        },
+     },
+
     // JWT Configuration
     jwt: {
         secret: process.env.JWT_SECRET || 'your-super-secret-jwt-key',

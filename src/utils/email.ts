@@ -40,7 +40,7 @@ export const sendEmail = async ({
       html,
       text,
     });
-    logger.info(`Email sent to ${to}`);
+    logger.info(`Email sent to ${to}, ${subject}`);
   } catch (err) {
     const errorInfo = {
       message: err instanceof Error ? err.message : "Unknown error",

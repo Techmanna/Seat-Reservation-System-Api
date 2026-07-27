@@ -26,6 +26,7 @@ export const cancelReservationParamsSchema = Joi.object({
 });
 
 export const bookingSchema = Joi.object({
+  hallId: Joi.string().optional(),
   eventDate: Joi.date().iso().required(),
   seatNumbers: Joi.array().items(Joi.number().positive()).min(1).required(),
   seatLabels: Joi.array().items(Joi.string()).min(1).required(),
@@ -81,6 +82,7 @@ export const getAllBookingsSchema = Joi.object({
   includeFullyBooked: Joi.boolean().optional(),
   startDate: Joi.string().isoDate().optional(),
   endDate: Joi.string().isoDate().optional(),
+  hallId: Joi.string().optional(),
 });
 
 
@@ -216,6 +218,7 @@ export const adminQuerySchema = Joi.object({
 });
 
 export const otpVerificationSchema = Joi.object({
+    hallId: Joi.string().optional(),
     email: Joi.string().email().required(),
     otp: Joi.string().length(4).pattern(/^\d+$/).required(),
     tempId: Joi.string().uuid().required(),

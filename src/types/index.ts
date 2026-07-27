@@ -5,17 +5,68 @@ export interface User {
     _id?: string;
     name: string;
     email: string;
-    phone: string;
-    gender: 'male' | 'female' | 'other';
-    ageRange: '18-25' | '26-35' | '36-45' | '46-55' | '55+';
+    phone?: string;
+    country?: string;
+    gender?: 'male' | 'female' | 'other';
+    ageRange?: '18-25' | '26-35' | '36-45' | '46-55' | '55+';
+    password?: string;
+    googleId?: string;
+    authProvider: 'local' | 'google';
+    isVerified?: boolean;
+    verificationOtp?: string;
+    verificationOtpExpiry?: Date;
+    resetPasswordToken?: string;
+    resetPasswordExpiry?: Date;
+    createdAt?: Date;
+    updatedAt?: Date;
+}
+
+export interface Hall {
+    _id?: string;
+    name: string;
+    state: string;
+    city: string;
+    address: string;
+    isActive: boolean;
+    featureImage?: string;
+    
+    // Hall-specific settings
+    reservationOpenDate: Date;
+    reservationCloseDate: Date;
+    defaultTotalSeats: number;
+    seatCapacityOverrides?: {
+        date: Date;
+        totalSeats: number;
+    }[];
+    eventTimes: string[];
+    workingDays: number[]; // 1-5 for Monday to Friday
+    maxSeatsPerUser: number;
+    blockedDates?: Date[];
+    minCancellationHours?: number;
+    prioritySystemEnabled: boolean;
+    prioritySeatAllocation: number;
+    waitingListCapacity: number;
+    autoAllocationHoursBeforeEvent: number;
+    priorityRules: {
+        newUser: boolean;
+        lowFrequency: boolean;
+        inactivity: boolean;
+        neverBooked: boolean;
+    };
+    lowFrequencyThreshold: number;
+    lowFrequencyPeriodDays: number;
+    inactivityPeriodDays: number;
+    
     createdAt?: Date;
     updatedAt?: Date;
 }
 
 export interface Event {
     _id?: string;
+    hall: mongoose.Schema.Types.ObjectId | Hall;
     date: Date;
     time: string;
+    endTime?: string;
     totalSeats: number;
     availableSeats: number;
     isActive: boolean;
@@ -23,6 +74,10 @@ export interface Event {
     updatedAt?: Date;
     location?:string;
     sessionName?:string;
+    zoomMeetingId?: string;
+    zoomMeetingUrl?: string;
+    zoomPassword?: string;
+    title?: string;
 }
 
 export enum BookingStatus {
@@ -30,6 +85,7 @@ export enum BookingStatus {
     Cancelled = 'cancelled',
     Attended = 'attended',
     Voided = 'voided',
+    Waitlisted = 'waitlisted',
 }
 
 export interface Booking {
@@ -37,6 +93,7 @@ export interface Booking {
     ticketId: string;
     user: mongoose.Schema.Types.ObjectId | User;
     event: mongoose.Schema.Types.ObjectId | Event;
+    hall: mongoose.Schema.Types.ObjectId | Hall;
     eventDate: Date;
     seatNumbers: number[];
     seatLabels: String[],
@@ -48,6 +105,8 @@ export interface Booking {
     cancelledAt?:Date;
     calendarLink?: string;
     attendedAt?: Date;
+    category?: 'priority' | 'general';
+    priorityScore?: number;
 }
 
 // export interface Admin {
@@ -103,9 +162,23 @@ export interface SystemSettings {
     updatedAt?: Date;
     blockedDates?: Date[];
     minCancellationHours?: number;
+    prioritySystemEnabled: boolean;
+    prioritySeatAllocation: number;
+    waitingListCapacity: number;
+    autoAllocationHoursBeforeEvent: number;
+    priorityRules: {
+        newUser: boolean;
+        lowFrequency: boolean;
+        inactivity: boolean;
+        neverBooked: boolean;
+    };
+    lowFrequencyThreshold: number;
+    lowFrequencyPeriodDays: number;
+    inactivityPeriodDays: number;
 }
 
 export interface BookingRequest {
+    hallId?: string; // Optional for backward compatibility, defaults to main hall
     eventDate: string|Date;
     seatNumbers: number[];
     name: string;
@@ -115,6 +188,9 @@ export interface BookingRequest {
     ageRange: '18-25' | '26-35' | '36-45' | '46-55' | '55+';
     seatLabels: string[];
     reservationToken: string;
+    category?: 'priority' | 'general';
+    priorityScore?: number;
+    isWaitlist?: boolean;
 }
 
 export interface ApiResponse<T> {
@@ -159,6 +235,7 @@ export interface AdminLoginRequest {
 
 export interface AuthRequest extends Request {
     admin?: any;
+    user?: any;
 }
 
 export interface PendingBooking {

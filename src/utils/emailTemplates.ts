@@ -253,6 +253,7 @@ export class EmailTemplateBuilder {
 
     const u = user as User;
     const e = event as Event;
+    const h = data.hall as any;
 
     const content = `
     <div class="header">
@@ -272,7 +273,7 @@ export class EmailTemplateBuilder {
       <div class="detail-row">
         <span class="detail-label">Date </span>
         <span class="detail-value">${" "}${formatDate(
-      eventDate.toString()
+      eventDate
     )}</span>
       </div>
 
@@ -301,11 +302,9 @@ export class EmailTemplateBuilder {
     <div class="details-section">
       <h2 class="details-title">📍 Venue</h2>
       <p class="detail-value">
-        MAB Studios,<br/>
-        3, Worship Center,<br/>
-        Off Etal Avenue,<br/>
-        Kudirat Abiola Way,<br/>
-        Oregun, Lagos.
+        ${h?.name || "MAB Studios"},<br/>
+        ${h?.address || "3, Worship Center, Off Etal Avenue, Kudirat Abiola Way"},<br/>
+        ${h?.city || "Oregun"}, ${h?.state || "Lagos"}.
       </p>
     </div>
 
@@ -391,7 +390,7 @@ export class EmailTemplateBuilder {
           <div class="detail-row">
             <span class="detail-label">Date</span>
             <span class="detail-value">${formatDate(
-              eventDate.toString()
+              eventDate
             )}</span>
           </div>
           <div class="detail-row">
@@ -499,6 +498,152 @@ export class EmailTemplateBuilder {
         <p>© ${new Date().getFullYear()}. All rights reserved.</p>
       </div>
     `;
+
+    return this.generateBaseTemplate(content);
+  }
+
+  // Waitlist Confirmation Template
+  generateWaitlistConfirmation(data: Booking) {
+    const { eventDate, ticketId, event, user } = data;
+    const u = user as User;
+    const e = event as Event;
+
+    const content = `
+    <div class="header">
+      <img src="${this.getLogo()}" alt="Logo" class="logo">
+    </div>
+
+    <h1 class="title">You're on the Waiting List</h1>
+
+    <p class="subtitle">
+      The general allocation for this session is currently full. We've placed you on the waiting list for 
+      <strong>The Morayo Show</strong> on ${formatDate(eventDate)}.
+    </p>
+
+    <div class="details-section">
+      <h2 class="details-title">Waiting List Details</h2>
+      <div class="detail-row">
+        <span class="detail-label">Date </span>
+        <span class="detail-value">${formatDate(eventDate)}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Booking ID</span>
+        <span class="detail-value" style="font-family: monospace;">${ticketId}</span>
+      </div>
+    </div>
+
+    <div class="info-section">
+      <div class="info-header">
+        <span class="info-title">What happens next?</span>
+      </div>
+      <ul class="info-list">
+        <li><span class="info-bullet"></span>
+          If a seat becomes available, we will notify you immediately via email.
+        </li>
+        <li><span class="info-bullet"></span>
+          12 hours before the event, any remaining priority slots will be automatically allocated to users on the waiting list.
+        </li>
+        <li><span class="info-bullet"></span>
+          Please note that your original seat selection is not guaranteed.
+        </li>
+      </ul>
+    </div>
+
+    <div class="footer">
+      <p>Warm regards,<br/><strong>The Morayo Show Team</strong></p>
+      ${u.email ? `<p>This email was sent to ${u.email}</p>` : ""}
+    </div>
+  `;
+
+    return this.generateBaseTemplate(content);
+  }
+
+  // Booking Rejection Template (Capacity Full)
+  generateBookingRejection(user: User, eventDate: Date, reason: string) {
+    const content = `
+    <div class="header">
+      <img src="${this.getLogo()}" alt="Logo" class="logo">
+    </div>
+
+    <h1 class="title" style="color: #ef4444;">Capacity Reached</h1>
+
+    <p class="subtitle">
+      We're sorry, but we couldn't complete your booking for 
+      <strong>The Morayo Show</strong> on ${formatDate(eventDate)}.
+    </p>
+
+    <div class="details-section" style="border-left: 4px solid #ef4444;">
+      <h2 class="details-title">Reason</h2>
+      <p class="detail-value">${reason}</p>
+    </div>
+
+    <div class="info-section">
+      <p style="font-size: 14px; color: #374151;">
+        The event has reached full capacity and our waiting list is also full. 
+        We encourage you to try booking for a different date or follow our social media for updates on future sessions.
+      </p>
+    </div>
+
+    <div class="footer">
+      <p>Warm regards,<br/><strong>The Morayo Show Team</strong></p>
+      <p>This email was sent to ${user.email}</p>
+    </div>
+  `;
+
+    return this.generateBaseTemplate(content);
+  }
+
+  // Waitlist Approved Template
+  generateWaitlistApproved(data: Booking) {
+    const { eventDate, seatLabels, ticketId, qrCode, user } = data;
+    const u = user as User;
+
+    const content = `
+    <div class="header">
+      <img src="${this.getLogo()}" alt="Logo" class="logo">
+    </div>
+
+    <h1 class="title" style="color: #10b981;">You're Confirmed!</h1>
+
+    <p class="subtitle">
+      Great news! You've been moved from the waiting list to a confirmed attendee for 
+      <strong>The Morayo Show</strong>.
+    </p>
+
+    <div class="details-section">
+      <h2 class="details-title">New Booking Details</h2>
+      <div class="detail-row">
+        <span class="detail-label">Date </span>
+        <span class="detail-value">${formatDate(eventDate)}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Seat(s)</span>
+        <span class="detail-value">${Array.isArray(seatLabels) ? seatLabels.join(", ") : seatLabels}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Booking ID</span>
+        <span class="detail-value" style="font-family: monospace;">${ticketId}</span>
+      </div>
+    </div>
+
+    ${
+      qrCode
+        ? `
+      <div class="qr-section">
+        <img src="${qrCode}" alt="QR Code" class="qr-code">
+        <p style="margin-top: 10px; color: #6b7280; font-size: 14px;">
+          Please present this QR code at the venue
+        </p>
+      </div>
+    `
+        : ""
+    }
+
+    <div class="footer">
+      <p>We look forward to seeing you!<br/><strong>The Morayo Show Team</strong></p>
+      ${u.email ? `<p>This email was sent to ${u.email}</p>` : ""}
+    </div>
+  `;
 
     return this.generateBaseTemplate(content);
   }

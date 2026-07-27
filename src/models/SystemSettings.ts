@@ -61,6 +61,43 @@ const systemSettingsSchema = new Schema<SystemSettings>(
       min: 0,
       default: 2,
     },
+    prioritySystemEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    prioritySeatAllocation: {
+      type: Number,
+      min: 0,
+      default: 50,
+    },
+    waitingListCapacity: {
+      type: Number,
+      min: 0,
+      default: 50,
+    },
+    autoAllocationHoursBeforeEvent: {
+      type: Number,
+      min: 1,
+      default: 12,
+    },
+    priorityRules: {
+      newUser: { type: Boolean, default: true },
+      lowFrequency: { type: Boolean, default: true },
+      inactivity: { type: Boolean, default: true },
+      neverBooked: { type: Boolean, default: true },
+    },
+    lowFrequencyThreshold: {
+      type: Number,
+      default: 2,
+    },
+    lowFrequencyPeriodDays: {
+      type: Number,
+      default: 30,
+    },
+    inactivityPeriodDays: {
+      type: Number,
+      default: 60,
+    },
   },
   {
     timestamps: true,
