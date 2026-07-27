@@ -20,6 +20,15 @@ const connectDB = async (): Promise<void> => {
         // Run all seeders
         await runSeeders();
         
+        // Sync indexes to remove any old deprecated unique indexes
+        try {
+            const { EventModel } = await import('../models/Event');
+            await EventModel.syncIndexes();
+            logger.info("Successfully synchronized indexes for EventModel");
+        } catch (idxError) {
+            logger.error("Error syncing indexes:", idxError);
+        }
+        
     } catch (err) {
         logger.error('Error: Failed to connect MongoDB:', err);
         throw err;
