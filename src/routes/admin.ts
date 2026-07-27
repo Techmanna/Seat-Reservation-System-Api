@@ -1,4 +1,5 @@
 import { Router } from "express";
+import mongoose from "mongoose";
 import { UserModel } from "../models/User";
 import { EventModel } from "../models/Event";
 import { BookingModel } from "../models/Booking";
@@ -554,7 +555,7 @@ router.get("/dashboard/upcoming-events", async (req, res) => {
 // Get all dashboard data in one request (optional - for better performance)
 router.get("/dashboard/all", async (req, res) => {
   try {
-    const { startDate, endDate } = req.query;
+    const { startDate, endDate, hallId } = req.query;
 
     let rangeStart: Date;
     let rangeEnd: Date;
@@ -582,6 +583,27 @@ router.get("/dashboard/all", async (req, res) => {
 
     const today = new Date(); // still needed for upcoming events reference
 
+    const periodQuery: any = {
+      createdAt: { $gte: rangeStart, $lte: rangeEnd },
+      status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+    };
+    const previousPeriodQuery: any = {
+      createdAt: { $gte: comparisonStart, $lte: comparisonEnd },
+      status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+    };
+    const confirmedQuery: any = { status: "confirmed" };
+    const checkedInQuery: any = { status: "checked-in" };
+    const eventQuery: any = { date: { $gte: today }, isActive: true };
+
+    if (hallId && hallId !== "all") {
+      const hallObjId = new mongoose.Types.ObjectId(hallId as string);
+      periodQuery.hall = hallObjId;
+      previousPeriodQuery.hall = hallObjId;
+      confirmedQuery.hall = hallObjId;
+      checkedInQuery.hall = hallObjId;
+      eventQuery.hall = hallObjId;
+    }
+
     // Get all data in parallel
     const [
       periodRegistrations,
@@ -591,26 +613,14 @@ router.get("/dashboard/all", async (req, res) => {
       upcomingEvents,
       periodBookings,
     ] = await Promise.all([
-      BookingModel.countDocuments({
-        createdAt: { $gte: rangeStart, $lte: rangeEnd },
-        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-      }),
-      BookingModel.countDocuments({
-        createdAt: { $gte: comparisonStart, $lte: comparisonEnd },
-        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-      }),
-      BookingModel.countDocuments({ status: "confirmed" }),
-      BookingModel.countDocuments({ status: "checked-in" }),
-      EventModel.find({
-        date: { $gte: today },
-        isActive: true,
-      })
+      BookingModel.countDocuments(periodQuery),
+      BookingModel.countDocuments(previousPeriodQuery),
+      BookingModel.countDocuments(confirmedQuery),
+      BookingModel.countDocuments(checkedInQuery),
+      EventModel.find(eventQuery)
         .sort({ date: 1 })
         .limit(4),
-      BookingModel.find({
-        createdAt: { $gte: rangeStart, $lte: rangeEnd },
-        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-      }).populate("user", "name email gender ageRange"),
+      BookingModel.find(periodQuery).populate("user", "name email gender ageRange"),
     ]);
 
     // Calculate trend
@@ -825,6 +835,7 @@ router.get("/registrations", async (req, res) => {
       ageGroup,
       eventDate,
       status,
+      hallId,
       page = 1,
       limit = 50,
       sortBy = "createdAt",
@@ -851,6 +862,11 @@ router.get("/registrations", async (req, res) => {
       matchQuery.eventDate = { $gte: startOfEventDate, $lte: endOfEventDate };
     }
 
+    // Hall filter
+    if (hallId && hallId !== "all") {
+      matchQuery.hall = new mongoose.Types.ObjectId(hallId as string);
+    }
+
     // Build aggregation pipeline
     const pipeline: any[] = [
       { $match: matchQuery },
@@ -870,8 +886,17 @@ router.get("/registrations", async (req, res) => {
           as: "eventInfo",
         },
       },
+      {
+        $lookup: {
+          from: "halls",
+          localField: "hall",
+          foreignField: "_id",
+          as: "hall",
+        },
+      },
       { $unwind: "$userInfo" },
       { $unwind: "$eventInfo" },
+      { $unwind: { path: "$hall", preserveNullAndEmptyArrays: true } },
     ];
 
     // Add user-based filters
@@ -946,6 +971,10 @@ router.get("/registrations", async (req, res) => {
           time: "$eventInfo.time",
           totalSeats: "$eventInfo.totalSeats",
         },
+        hall: {
+          _id: "$hall._id",
+          name: "$hall.name"
+        }
       },
     });
 
@@ -1027,18 +1056,24 @@ router.get("/registrations/event-dates", async (req, res) => {
 // Get registration statistics
 router.get("/registrations/stats", async (req, res) => {
   try {
-    const [totalCount, statusStats, genderStats, ageStats] = await Promise.all([
+    const { hallId } = req.query;
+
+    const baseMatch: any = {
+      status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+    };
+
+    if (hallId && hallId !== "all") {
+      baseMatch.hall = new mongoose.Types.ObjectId(hallId as string);
+    }
+
+    const [totalCount, statusStats, genderStats, ageStats, hallStats] = await Promise.all([
       // Total registrations (excluding cancelled)
-      BookingModel.countDocuments({
-        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-      }),
+      BookingModel.countDocuments(baseMatch),
 
       // Status distribution
       BookingModel.aggregate([
         {
-          $match: {
-            status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-          },
+          $match: baseMatch,
         },
         { $group: { _id: "$status", count: { $sum: 1 } } },
       ]),
@@ -1046,9 +1081,7 @@ router.get("/registrations/stats", async (req, res) => {
       // Gender distribution
       BookingModel.aggregate([
         {
-          $match: {
-            status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-          },
+          $match: baseMatch,
         },
         {
           $lookup: {
@@ -1070,9 +1103,7 @@ router.get("/registrations/stats", async (req, res) => {
       // Age group distribution
       BookingModel.aggregate([
         {
-          $match: {
-            status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-          },
+          $match: baseMatch,
         },
         {
           $lookup: {
@@ -1090,6 +1121,30 @@ router.get("/registrations/stats", async (req, res) => {
           },
         },
       ]),
+
+      // Hall distribution (unfiltered by hallId so we always see all halls)
+      BookingModel.aggregate([
+        {
+          $match: {
+            status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+          },
+        },
+        {
+          $lookup: {
+            from: "halls",
+            localField: "hall",
+            foreignField: "_id",
+            as: "hallInfo",
+          },
+        },
+        { $unwind: { path: "$hallInfo", preserveNullAndEmptyArrays: true } },
+        {
+          $group: {
+            _id: { id: "$hallInfo._id", name: "$hallInfo.name" },
+            count: { $sum: 1 },
+          },
+        },
+      ]),
     ]);
 
     res.json({
@@ -1102,10 +1157,15 @@ router.get("/registrations/stats", async (req, res) => {
           count: s.count,
         })),
         genderStats: genderStats.map((g) => ({
-          gender: g._id.charAt(0).toUpperCase() + g._id.slice(1),
+          gender: g._id ? g._id.charAt(0).toUpperCase() + g._id.slice(1) : 'Unknown',
           count: g.count,
         })),
-        ageStats: ageStats.map((a) => ({ ageGroup: a._id, count: a.count })),
+        ageStats: ageStats.map((a) => ({ ageGroup: a._id || 'Unknown', count: a.count })),
+        hallStats: hallStats.map((h) => ({
+          hallId: h._id.id || null,
+          hallName: h._id.name || 'Unassigned',
+          count: h.count
+        }))
       },
     });
   } catch (error: any) {
@@ -1454,13 +1514,14 @@ router.get(
   validateRequest(getAllBookingsSchema),
   async (req, res) => {
     try {
-      const { page = "1", limit = "10", search = "", status } = req.query;
+      const { page = "1", limit = "10", search = "", status, hallId } = req.query;
 
       const result = await bookingService.getAllBookings({
         page: parseInt(page as string, 10),
         limit: parseInt(limit as string, 10),
         search: search as string,
         status: status as BookingStatus,
+        hallId: hallId as string,
       });
 
       res.status(200).json(result);

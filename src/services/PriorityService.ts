@@ -1,15 +1,16 @@
 import { UserModel } from "../models/User";
 import { BookingModel } from "../models/Booking";
-import { BookingStatus, SystemSettings } from "../types/index";
+import { BookingStatus, Hall } from "../types/index";
 import { DateTime } from "luxon";
 
 export class PriorityService {
   /**
-   * Calculates the priority score for a user based on historical data and rules.
+   * Calculates the priority score for a user based on historical data and rules for a specific hall.
    */
   public async calculatePriority(
     email: string,
-    settings: SystemSettings
+    hallId: string,
+    settings: Hall
   ): Promise<{ isPriority: boolean; score: number; reasons: string[] }> {
     let score = 0;
     const reasons: string[] = [];
@@ -30,15 +31,16 @@ export class PriorityService {
 
     const userId = user._id;
 
-    // 2. Never Booked for an event
+    // 2. Never Booked for an event in this hall
     const totalBookings = await BookingModel.countDocuments({
       user: userId,
+      hall: hallId,
       status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
     });
 
     if (totalBookings === 0 && settings.priorityRules.neverBooked) {
       score += 1;
-      reasons.push("Has never booked an event before");
+      reasons.push("Has never booked an event in this hall before");
     }
 
     // 3. Fewer bookings within a configurable period
@@ -47,6 +49,7 @@ export class PriorityService {
       .toJSDate();
     const recentBookings = await BookingModel.countDocuments({
       user: userId,
+      hall: hallId,
       createdAt: { $gte: periodStart },
       status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
     });
@@ -64,6 +67,7 @@ export class PriorityService {
     // 4. Inactivity period
     const lastBooking = await BookingModel.findOne({
       user: userId,
+      hall: hallId,
       status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
     }).sort({ eventDate: -1 });
 

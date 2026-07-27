@@ -1,7 +1,7 @@
 import { UserModel } from "../models/User";
 import { EventModel } from "../models/Event";
 import { BookingModel } from "../models/Booking";
-import { SystemSettingsModel } from "../models/SystemSettings";
+import { HallModel } from "../models/Hall";
 import { QRService } from "./QRService";
 import { v4 as uuidv4 } from "uuid";
 import { DateTime } from "luxon";
@@ -21,6 +21,7 @@ import { NotificationService } from "./NotificationService";
 import { OTPModel } from "../models/OTP";
 import { PendingBookingModel } from "../models/PendingBooking";
 import { getSystemSettings } from "./SettingsService";
+import { HallService } from "./HallService";
 import config from "../config/environment";
 import * as crypto from "crypto";
 import { buildEventUtcDate, EVENT_HOUR_WAT, EVENT_MINUTE_WAT, getEventEndTime, getEventStartTime, getLagosEndOfDay, getLagosStartOfDay } from "../utils/formatDate";
@@ -82,7 +83,18 @@ export class BookingService {
   > {
     try {
       // Perform all the validation checks first (same as original createBooking)
-      const settings = await getSystemSettings();
+      let settings;
+      if (bookingData.hallId) {
+          const hallResponse = await new HallService().getHallById(bookingData.hallId);
+          if (!hallResponse.data) {
+              return { success: false, message: "Hall not found", error: "Not found" };
+          }
+          settings = hallResponse.data;
+      } else {
+          settings = await HallService.getDefaultHall();
+          bookingData.hallId = settings._id?.toString();
+      }
+      
       const now = DateTime.now().setZone('Africa/Lagos').toJSDate();
       const selected = getLagosStartOfDay(bookingData.eventDate);
       const start = getLagosStartOfDay(settings.reservationOpenDate);
@@ -128,6 +140,7 @@ export class BookingService {
       if (existingUser) {
         const existingBooking = await BookingModel.findOne({
           user: { _id: existingUser._id?.toString() },
+          hall: bookingData.hallId,
           eventDate: {
             $gte: getLagosStartOfDay(eventDate),
             $lte: getLagosEndOfDay(eventDate),
@@ -146,11 +159,10 @@ export class BookingService {
         // or the pending booking
         const pendingBooking = await PendingBookingModel.findOne({
           email: bookingData.email,
-          bookingData: {
-            eventDate: {
-              $gte: getLagosStartOfDay(eventDate),
-              $lte: getLagosEndOfDay(eventDate),
-            },
+          "bookingData.hallId": bookingData.hallId,
+          "bookingData.eventDate": {
+            $gte: getLagosStartOfDay(eventDate),
+            $lte: getLagosEndOfDay(eventDate),
           },
         });
 
@@ -174,6 +186,7 @@ export class BookingService {
 
       // Find or create event
       let event = await EventModel.findOne({
+        hall: bookingData.hallId,
         date: {
           $gte: getLagosStartOfDay(eventDate),
           $lte: getLagosEndOfDay(eventDate),
@@ -186,6 +199,7 @@ export class BookingService {
         const title = `The Morayo Show Live - ${eventUtcDate.toDateString()}`;
 
         event = new EventModel({
+          hall: bookingData.hallId,
           date: eventUtcDate,
           // time: settings.eventTimes[0] || "11:00",
           // time: `${String(EVENT_HOUR_WAT).padStart(2, '0')}:${String(EVENT_MINUTE_WAT).padStart(2, '0')}`,
@@ -230,10 +244,12 @@ export class BookingService {
       // Check if requested seats are available in both confirmed and pending bookings
       const bookedSeats = await BookingModel.find({
         event: event._id?.toString(),
+        hall: bookingData.hallId,
         status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
       }).select("seatNumbers seatLabels");
 
       const pendingBookings = await PendingBookingModel.find({
+        "bookingData.hallId": bookingData.hallId,
         "bookingData.eventDate": {
           $gte: getLagosStartOfDay(eventDate),
           $lte: getLagosEndOfDay(eventDate),
@@ -262,6 +278,7 @@ export class BookingService {
       if (settings.prioritySystemEnabled) {
         const priorityResult = await this.priorityService.calculatePriority(
           bookingData.email,
+          bookingData.hallId!,
           settings
         );
         priorityScore = priorityResult.score;
@@ -593,10 +610,10 @@ export class BookingService {
   ): Promise<ApiResponse<Booking>> {
     try {
       const eventDate = new Date(bookingData.eventDate);
-      const settings = await getSystemSettings();
 
       // Find event
       let event = await EventModel.findOne({
+        hall: bookingData.hallId,
         date: {
           $gte: getLagosStartOfDay(eventDate),
           $lte: getLagosEndOfDay(eventDate),
@@ -622,6 +639,7 @@ export class BookingService {
       // Check seat availability again
       const bookedSeats = await BookingModel.find({
         event: event._id?.toString(),
+        hall: bookingData.hallId,
         status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
       }).select("seatNumbers seatLabels");
 
@@ -673,6 +691,7 @@ export class BookingService {
         ticketId,
         user,
         event,
+        hall: bookingData.hallId,
         eventDate: eventDate,
         seatNumbers,
         seatLabels,
@@ -701,6 +720,8 @@ export class BookingService {
         event.availableSeats -= seatNumbers.length;
         await event.save();
       }
+
+      await booking.populate("hall");
 
       // Send notifications
       try {
@@ -788,8 +809,9 @@ export class BookingService {
       const event = await EventModel.findById(eventId);
       if (!event) return;
 
-      const settings = await getSystemSettings();
-      if (!settings.prioritySystemEnabled) return;
+      const hallResponse = await new HallService().getHallById(event.hall.toString());
+      const settings = hallResponse.data;
+      if (!settings || !settings.prioritySystemEnabled) return;
 
       // Calculate capacity
       const totalCapacity = event.totalSeats;
@@ -892,7 +914,7 @@ export class BookingService {
       const booking = await BookingModel.findOne({
         ticketId,
         status: BookingStatus.Waitlisted,
-      }).populate("user event");
+      }).populate("user event hall");
 
       if (!booking) {
         return {
@@ -1060,7 +1082,7 @@ export class BookingService {
         { ticketId, status: BookingStatus.Attending },
         { status: BookingStatus.Attended },
         { new: true }
-      ).populate("user event");
+      ).populate("user event hall");
 
       if (!booking) {
         return {
@@ -1084,13 +1106,24 @@ export class BookingService {
     }
   }
 
-  async getAvailableSeats(eventDate: string): Promise<ApiResponse<any>> {
+  async getAvailableSeats(eventDate: string, hallId?: string): Promise<ApiResponse<any>> {
     try {
       const date = new Date(eventDate);
-      const settings = await getSystemSettings();
+      let settings;
+      if (hallId) {
+          const hallResponse = await new HallService().getHallById(hallId);
+          if (!hallResponse.data) {
+              return { success: false, message: "Hall not found", error: "Not found" };
+          }
+          settings = hallResponse.data;
+      } else {
+          settings = await HallService.getDefaultHall();
+          hallId = settings._id?.toString();
+      }
 
       // Find or get default event info
       let event = await EventModel.findOne({
+        hall: hallId,
         date: {
           $gte: getLagosStartOfDay(date),
           $lte: getLagosEndOfDay(date),
@@ -1103,6 +1136,7 @@ export class BookingService {
 
       // Get booked seats for this date
       const bookedSeats = await BookingModel.find({
+        hall: hallId,
         eventDate: {
           $gte: getLagosStartOfDay(date),
           $lte: getLagosEndOfDay(date),
@@ -1152,15 +1186,20 @@ export class BookingService {
     search = "",
     status,
     eventDate,
+    hallId,
   }: {
     page?: number;
     limit?: number;
     search?: string;
     status?: string;
     eventDate?: string;
+    hallId?: string;
   }): Promise<ApiResponse<Booking[]>> {
     try {
       const query: any = {};
+      if (hallId) {
+        query.hall = hallId;
+      }
 
       // Search by user full name or event name
       // Search by user or event fields
@@ -1207,7 +1246,7 @@ export class BookingService {
       const skip = (page - 1) * limit;
 
       const bookings = await BookingModel.find(query)
-        .populate("user event")
+        .populate("user event hall")
         .skip(skip)
         .limit(limit)
         .sort({ createdAt: -1 }) // most recent first
@@ -1242,15 +1281,23 @@ export class BookingService {
     includeFullyBooked = false,
     startDate,
     endDate,
+    hallId,
   }: {
     page?: number;
     limit?: number;
     includeFullyBooked?: boolean;
     startDate?: string;
     endDate?: string;
+    hallId?: string;
   }): Promise<ApiResponse<any>> {
     try {
-      const settings = await getSystemSettings();
+      let settings;
+      if (hallId) {
+        const hallResponse = await new HallService().getHallById(hallId);
+        settings = hallResponse.data || (await HallService.getDefaultHall());
+      } else {
+        settings = await HallService.getDefaultHall();
+      }
       const now = DateTime.now().setZone('Africa/Lagos');
       const today = now.startOf('day').toJSDate();
 
@@ -1259,6 +1306,10 @@ export class BookingService {
         date: { $gte: today },
         isActive: true,
       };
+
+      if (hallId) {
+        query.hall = hallId;
+      }
 
       // Add date range filters if provided
       if (startDate) {
@@ -1403,7 +1454,7 @@ export class BookingService {
       const booking = await BookingModel.findOne({
         ticketId,
         status: BookingStatus.Attending,
-      }).populate("user event");
+      }).populate("user event hall");
 
       if (!booking) {
         return {
@@ -1443,7 +1494,8 @@ export class BookingService {
       // }
 
       // Check if cancellation is allowed (e.g., not too close to event date)
-      const settings = await getSystemSettings();
+      const hallResponse = await new HallService().getHallById(booking.hall.toString());
+      const settings = hallResponse.data || await HallService.getDefaultHall();
       const now = new Date();
       const eventDate = new Date(booking.eventDate);
       const hoursUntilEvent =
@@ -1519,7 +1571,7 @@ export class BookingService {
         { ticketId, status: BookingStatus.Attending },
         { status: BookingStatus.Cancelled, cancelledAt: now },
         { new: true }
-      ).populate("user event");
+      ).populate("user event hall");
 
       if (!booking) {
         return {
@@ -1545,23 +1597,27 @@ export class BookingService {
   }
 
   // getUpcomingEvents
-  async getUpcomingEventsSummary(): Promise<ApiResponse<any>> {
+  async getUpcomingEventsSummary(hallId?: string): Promise<ApiResponse<any>> {
     try {
-      const settings = await getSystemSettings();
+      let settings;
+      if (hallId) {
+        const hallResponse = await new HallService().getHallById(hallId);
+        settings = hallResponse.data || (await HallService.getDefaultHall());
+      } else {
+        settings = await HallService.getDefaultHall();
+      }
+      
       const now = DateTime.now().setZone('Africa/Lagos');
       const today = now.startOf('day').toJSDate();
+      
+      const query: any = { date: { $gte: today }, isActive: true };
+      if (hallId) query.hall = hallId;
 
       // Get upcoming events count
-      const upcomingEventsCount = await EventModel.countDocuments({
-        date: { $gte: today },
-        isActive: true,
-      });
+      const upcomingEventsCount = await EventModel.countDocuments(query);
 
       // Get next few events (next 5)
-      const nextEvents = await EventModel.find({
-        date: { $gte: today },
-        isActive: true,
-      })
+      const nextEvents = await EventModel.find(query)
         .sort({ date: 1 })
         .limit(5)
         .lean()
@@ -1571,6 +1627,7 @@ export class BookingService {
       const nextEventsWithStats = await Promise.all(
         nextEvents.map(async (event) => {
           const bookings = await BookingModel.find({
+            hall: event.hall,
             eventDate: {
               $gte: getLagosStartOfDay(event.date),
               $lte: getLagosEndOfDay(event.date),

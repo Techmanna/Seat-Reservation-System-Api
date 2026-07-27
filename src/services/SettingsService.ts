@@ -1,10 +1,11 @@
 import { NotFoundError } from "../middleware/errorHandler";
-import { SystemSettingsModel } from "../models/SystemSettings";
-import { ApiResponse, SystemSettings } from "../types";
+import { HallModel } from "../models/Hall";
+import { ApiResponse, Hall } from "../types";
+import { HallService } from "./HallService";
 
 
-export async function getSystemSettings(): Promise<SystemSettings> {
-    const settings = await SystemSettingsModel.findOne();
+export async function getSystemSettings(): Promise<Hall> {
+    const settings = await HallService.getDefaultHall();
 
     if (!settings) {
         throw new NotFoundError('System settings not configured');
@@ -14,7 +15,7 @@ export async function getSystemSettings(): Promise<SystemSettings> {
 }
 
 export class SettingsService {
-    async getSettings(): Promise<ApiResponse<SystemSettings>> {
+    async getSettings(): Promise<ApiResponse<Hall>> {
         const settings = await getSystemSettings();
         return {
             success: true,
@@ -23,8 +24,9 @@ export class SettingsService {
         };
     }
 
-    async updateSettings(settings: any): Promise<ApiResponse<SystemSettings>> {
-        const updatedSettings = await SystemSettingsModel.findOneAndUpdate({}, settings, { new: true });
+    async updateSettings(settings: Partial<Hall>): Promise<ApiResponse<Hall>> {
+        const defaultHall = await getSystemSettings();
+        const updatedSettings = await HallModel.findByIdAndUpdate(defaultHall._id, settings, { new: true });
 
         if (!updatedSettings) {
             throw new NotFoundError('Settings not found');

@@ -84,7 +84,7 @@ const settingsService = new SettingsService();
  *                   type: string
  *                   example: "Database connection failed"
  */
-router.get("", async (req, res) => {
+router.get("", async (req, res, next) => {
   try {
     const result = await settingsService.getSettings();
 
@@ -105,11 +105,7 @@ router.get("", async (req, res) => {
       },
     });
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch settings",
-      error: error.message,
-    });
+    next(error);
   }
 });
 

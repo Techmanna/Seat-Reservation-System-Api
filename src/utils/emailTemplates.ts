@@ -253,6 +253,7 @@ export class EmailTemplateBuilder {
 
     const u = user as User;
     const e = event as Event;
+    const h = data.hall as any;
 
     const content = `
     <div class="header">
@@ -301,11 +302,9 @@ export class EmailTemplateBuilder {
     <div class="details-section">
       <h2 class="details-title">📍 Venue</h2>
       <p class="detail-value">
-        MAB Studios,<br/>
-        3, Worship Center,<br/>
-        Off Etal Avenue,<br/>
-        Kudirat Abiola Way,<br/>
-        Oregun, Lagos.
+        ${h?.name || "MAB Studios"},<br/>
+        ${h?.address || "3, Worship Center, Off Etal Avenue, Kudirat Abiola Way"},<br/>
+        ${h?.city || "Oregun"}, ${h?.state || "Lagos"}.
       </p>
     </div>
 
