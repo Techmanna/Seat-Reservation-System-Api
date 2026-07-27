@@ -12,6 +12,11 @@ const bookingSchema = new Schema<Booking>({
     required: true,
     ref: 'User'
   },
+  hall: {
+    type: mongoose.Schema.Types.ObjectId,
+    required: true,
+    ref: 'Hall'
+  },
   event: {
     type: mongoose.Schema.Types.ObjectId,
     required: true,
@@ -66,7 +71,10 @@ const bookingSchema = new Schema<Booking>({
 // Fix incorrect field names and add compound indexes for performance
 bookingSchema.index({ user: 1 });
 bookingSchema.index({ event: 1 });
+bookingSchema.index({ hall: 1 });
 bookingSchema.index({ status: 1 });
+bookingSchema.index({ hall: 1, status: 1 });
+bookingSchema.index({ hall: 1, eventDate: -1 }); // often sorted descending per hall
 bookingSchema.index({ eventDate: -1 }); // often sorted descending
 bookingSchema.index({ user: 1, status: 1 });
 bookingSchema.index({ event: 1, status: 1 });

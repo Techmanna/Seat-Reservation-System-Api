@@ -159,7 +159,8 @@ router.post('/resend-otp', async (req, res) => {
 router.get('/seats/:date', async (req, res) => {
   try {
     const { date } = req.params;
-    const result = await bookingService.getAvailableSeats(date);
+    const { hallId } = req.query;
+    const result = await bookingService.getAvailableSeats(date, hallId as string);
 
     const statusCode = result.success ? 200 : 400;
 

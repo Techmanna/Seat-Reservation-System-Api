@@ -1,11 +1,16 @@
-import { Schema, model } from 'mongoose';
+import mongoose, { Schema, model } from 'mongoose';
 import { Event } from '../types/index';
 
 const eventSchema = new Schema<Event>({
+  hall: {
+    type: mongoose.Schema.Types.ObjectId,
+    required: true,
+    ref: 'Hall'
+  },
   date: {
     type: Date,
     required: true,
-    unique: true
+    unique: false
   },
   time: {
     type: String,
@@ -49,7 +54,8 @@ const eventSchema = new Schema<Event>({
   timestamps: true
 });
 
-// Only keep index for non-unique field
+// Keep index for non-unique field
 eventSchema.index({ isActive: 1 });
+eventSchema.index({ hall: 1, date: 1 }, { unique: true });
 
 export const EventModel = model<Event>('Event', eventSchema);

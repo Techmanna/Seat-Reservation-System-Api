@@ -21,8 +21,49 @@ export interface User {
     updatedAt?: Date;
 }
 
+export interface Hall {
+    _id?: string;
+    name: string;
+    state: string;
+    city: string;
+    address: string;
+    isActive: boolean;
+    featureImage?: string;
+    
+    // Hall-specific settings
+    reservationOpenDate: Date;
+    reservationCloseDate: Date;
+    defaultTotalSeats: number;
+    seatCapacityOverrides?: {
+        date: Date;
+        totalSeats: number;
+    }[];
+    eventTimes: string[];
+    workingDays: number[]; // 1-5 for Monday to Friday
+    maxSeatsPerUser: number;
+    blockedDates?: Date[];
+    minCancellationHours?: number;
+    prioritySystemEnabled: boolean;
+    prioritySeatAllocation: number;
+    waitingListCapacity: number;
+    autoAllocationHoursBeforeEvent: number;
+    priorityRules: {
+        newUser: boolean;
+        lowFrequency: boolean;
+        inactivity: boolean;
+        neverBooked: boolean;
+    };
+    lowFrequencyThreshold: number;
+    lowFrequencyPeriodDays: number;
+    inactivityPeriodDays: number;
+    
+    createdAt?: Date;
+    updatedAt?: Date;
+}
+
 export interface Event {
     _id?: string;
+    hall: mongoose.Schema.Types.ObjectId | Hall;
     date: Date;
     time: string;
     endTime?: string;
@@ -52,6 +93,7 @@ export interface Booking {
     ticketId: string;
     user: mongoose.Schema.Types.ObjectId | User;
     event: mongoose.Schema.Types.ObjectId | Event;
+    hall: mongoose.Schema.Types.ObjectId | Hall;
     eventDate: Date;
     seatNumbers: number[];
     seatLabels: String[],
@@ -136,6 +178,7 @@ export interface SystemSettings {
 }
 
 export interface BookingRequest {
+    hallId?: string; // Optional for backward compatibility, defaults to main hall
     eventDate: string|Date;
     seatNumbers: number[];
     name: string;

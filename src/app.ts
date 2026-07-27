@@ -9,6 +9,7 @@ import connectDB from './config/database';
 import bookingRoutes from './routes/booking';
 import settingsRoutes from './routes/settings';
 import adminRoutes from './routes/admin';
+import hallRoutes from './routes/hall';
 import config from './config/environment';
 import appHealth from './routes/AppHealth';
 import authRoute from './routes/auth';
@@ -131,6 +132,7 @@ app.get('/health', appHealth);
 // Routes
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/halls', hallRoutes);
 app.use('/api/auth', authRoute);
 app.use('/api/admin', authenticateAdmin, adminRoutes);
 app.use('/api/events', eventRoutes);
