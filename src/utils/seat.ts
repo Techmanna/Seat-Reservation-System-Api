@@ -27,6 +27,7 @@ export class SeatUtils {
   static seatLabelToNumber(seatLabel: string): number {
     const match = seatLabel.match(/^([A-Z])(\d+)$/);
     if (!match) {
+      console.log("Invalid seat label", { seatLabel });
       throw new Error(`Invalid seat label: ${seatLabel}`);
     }
 
@@ -91,6 +92,8 @@ export class SeatUtils {
         numbers.push(number);
         labels.push(label);
       } catch (error) {
+        console.log("Invalid seat label", {error});
+        
         throw new Error(`Invalid seat label: ${label}`);
       }
     }
