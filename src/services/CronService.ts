@@ -48,21 +48,31 @@ export class CronService {
 
                 // Find or create the event
                 let event = await EventModel.findOne({
+                    hall: settings._id,
                     date: { $gte: dayStart, $lte: dayEnd }
                 });
 
+                const currentTotalSeats = SeatUtils.resolveTotalSeats(settings as any, dayStart);
+
                 if (!event) {
-                    const totalSeats = SeatUtils.resolveTotalSeats(settings, dayStart)
                     event = await EventModel.create({
+                        hall: settings._id,
                         date: eventUtcDate,
                         time: getEventStartTime(),
                         endTime: getEventEndTime(),
-                        totalSeats,
-                        availableSeats: totalSeats,
+                        totalSeats: currentTotalSeats,
+                        availableSeats: currentTotalSeats,
                         isActive: true,
                         title
                     });
-                } else if (!event.endTime || (event.date.getUTCHours() === 0 && event.date.getUTCMinutes() === 0)) {
+                } else if (event.totalSeats !== currentTotalSeats) {
+                    const diff = currentTotalSeats - event.totalSeats;
+                    event.totalSeats = currentTotalSeats;
+                    event.availableSeats += diff;
+                    await event.save();
+                }
+
+                if (!event.endTime || (event.date.getUTCHours() === 0 && event.date.getUTCMinutes() === 0)) {
                     // Backfill legacy events or fix incorrect midnight UTC dates
                     event.date = eventUtcDate;
                     event.endTime = getEventEndTime();
@@ -171,19 +181,29 @@ export class CronService {
             const dayEnd = getLagosEndOfDay(today);
             const eventUtcDate = buildEventUtcDate(dayStart);
 
+            const settings = await getSystemSettings();
+            const currentTotalSeats = SeatUtils.resolveTotalSeats(settings as any, dayStart);
+
             let event = await EventModel.findOne({
+                hall: settings._id,
                 date: { $gte: dayStart, $lte: dayEnd }
             });
 
             if (!event) {
                 event = await EventModel.create({
+                    hall: settings._id,
                     date: eventUtcDate,
                     time: getEventStartTime(),
                     endTime: getEventEndTime(),
-                    totalSeats: 500,
-                    availableSeats: 500,
+                    totalSeats: currentTotalSeats,
+                    availableSeats: currentTotalSeats,
                     isActive: true
                 });
+            } else if (event.totalSeats !== currentTotalSeats) {
+                const diff = currentTotalSeats - event.totalSeats;
+                event.totalSeats = currentTotalSeats;
+                event.availableSeats += diff;
+                await event.save();
             }
 
             if (!event.zoomMeetingId) {

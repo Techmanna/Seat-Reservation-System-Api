@@ -193,8 +193,9 @@ export class BookingService {
         },
       });
 
+      const currentTotalSeats = SeatUtils.resolveTotalSeats(settings as any, eventDate);
+
       if (!event) {
-        const totalSeats = SeatUtils.resolveTotalSeats(settings, eventDate)
         const eventUtcDate = buildEventUtcDate(eventDate);
         const title = `The Morayo Show Live - ${eventUtcDate.toDateString()}`;
 
@@ -205,11 +206,16 @@ export class BookingService {
           // time: `${String(EVENT_HOUR_WAT).padStart(2, '0')}:${String(EVENT_MINUTE_WAT).padStart(2, '0')}`,
           time: getEventStartTime(),
           endTime: getEventEndTime(),
-          totalSeats,
-          availableSeats: totalSeats,
+          totalSeats: currentTotalSeats,
+          availableSeats: currentTotalSeats,
           isActive: true,
           title,
         });
+        await event.save();
+      } else if (event.totalSeats !== currentTotalSeats) {
+        const diff = currentTotalSeats - event.totalSeats;
+        event.totalSeats = currentTotalSeats;
+        event.availableSeats += diff;
         await event.save();
       }
 
