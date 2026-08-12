@@ -247,6 +247,118 @@ export class EmailTemplateBuilder {
       `;
   }
 
+
+  // Grouped Booking Confirmation Template
+  generateGroupedBookingConfirmation(bookings: any[]) {
+    if (!bookings || bookings.length === 0) return "";
+    const firstBooking = bookings[0];
+    const { ticketId, qrCode, user } = firstBooking;
+    const h = firstBooking.hall as any;
+    const u = user as any;
+
+    let datesListHtml = '';
+    bookings.forEach(b => {
+      datesListHtml += `
+      <div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed #e5e7eb;">
+        <div class="detail-row">
+          <span class="detail-label">Date </span>
+          <span class="detail-value">${" "}${formatDate(b.eventDate)}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Seat(s)</span>
+          <span class="detail-value">
+            ${" "}${Array.isArray(b.seatLabels) ? b.seatLabels.join(", ") : b.seatLabels}
+          </span>
+        </div>
+      </div>
+      `;
+    });
+
+    const content = `
+    <div class="header">
+      <img src="https://app.themorayobrownshow.com/assets/tmas-logo-Cfr-CT8I.png" alt="Logo" class="logo">
+    </div>
+
+    <h1 class="title">Hello!</h1>
+
+    <p class="subtitle">
+      Thank you for registering to be part of the live audience on
+      <strong>The Morayo Show</strong>. We’re excited to have you with us.
+    </p>
+
+    <div class="details-section">
+      <h2 class="details-title">Event Details</h2>
+      
+      ${datesListHtml}
+
+      <div class="detail-row" style="margin-top: 15px;">
+        <span class="detail-label">Call Time </span>
+        <span class="detail-value">${" "}9:00am prompt</span>
+      </div>
+
+      <div class="detail-row">
+        <span class="detail-label">Booking ID</span>
+        <span class="detail-value" style="font-family: monospace;">
+          ${" "}${ticketId}
+        </span>
+      </div>
+    </div>
+
+    <div class="details-section">
+      <h2 class="details-title">📍 Venue</h2>
+      <p class="detail-value">
+        ${h?.name || "MAB Studios"},<br/>
+        ${h?.address || "3, Worship Center, Off Etal Avenue, Kudirat Abiola Way"},<br/>
+        ${h?.city || "Oregun"}, ${h?.state || "Lagos"}.
+      </p>
+    </div>
+
+    <div class="info-section">
+      <div class="info-header">
+        <span class="info-title">Important Notice</span>
+      </div>
+      <ul class="info-list">
+        <li><span class="info-bullet"></span>
+          This production will start${" "}<strong> strictly on time</strong>.
+        </li>
+        <li><span class="info-bullet"></span>
+          Please do${" "}<strong> NOT </strong>${" "}keep African time — entry will not be allowed after 9:00am.
+        </li>
+        <li><span class="info-bullet"></span>
+          Dress code: Please dress nicely and appropriately for a studio recording.
+        </li>
+      </ul>
+    </div>
+
+    ${
+      qrCode
+        ? `
+      <div class="qr-section">
+        <img src="${qrCode}" alt="QR Code" class="qr-code">
+        <p style="margin-top: 10px; color: #6b7280; font-size: 14px;">
+          Please present this QR code at the venue
+        </p>
+      </div>
+    `
+        : ""
+    }
+
+    <div class="details-section">
+      <p class="detail-value">
+        For enquiries please contact:
+        <strong>+234 904 833 1499</strong>
+      </p>
+    </div>
+
+    <div class="footer">
+      <p>Warm regards,<br/><strong>The Morayo Show Team</strong></p>
+      ${u?.email ? `<p>This email was sent to ${u.email}</p>` : ""}
+    </div>
+  `;
+
+    return this.generateBaseTemplate(content);
+  }
+
   // Booking Confirmation Template
   generateBookingConfirmation(data: Booking) {
     const { eventDate, seatLabels, ticketId, qrCode, event, user } = data;
@@ -648,6 +760,103 @@ export class EmailTemplateBuilder {
     return this.generateBaseTemplate(content);
   }
 
+  // Payment Link Email Template
+  generatePaymentLinkEmail(user: { name: string; email: string }, priceNGN: number, priceUSD: number, paymentLinkNGN: string | undefined, paymentLinkUSD: string | undefined, eventDates: Date[], extraDetails?: { hallName?: string, originalPriceNGN?: number, numBookings?: number }) {
+    const datesStr = eventDates.map(d => formatDate(d)).join(", ");
+    
+    let paymentDetailsHtml = '';
+    
+    if (extraDetails?.hallName) {
+      paymentDetailsHtml += `
+      <div class="detail-row" style="margin-top: 15px;">
+        <span class="detail-label">Hall / Location</span>
+        <span class="detail-value">${extraDetails.hallName}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Number of Bookings</span>
+        <span class="detail-value">${extraDetails.numBookings || eventDates.length}</span>
+      </div>
+      `;
+    }
+
+    if (priceNGN > 0 && paymentLinkNGN) {
+      if (extraDetails?.originalPriceNGN && extraDetails.originalPriceNGN > priceNGN) {
+        paymentDetailsHtml += `
+        <div class="detail-row" style="margin-top: 15px;">
+          <span class="detail-label">Original Price (NGN)</span>
+          <span class="detail-value" style="text-decoration: line-through; color: #ef4444;">₦ ${extraDetails.originalPriceNGN.toLocaleString()}</span>
+        </div>
+        `;
+      }
+      paymentDetailsHtml += `
+      <div class="detail-row" style="margin-top: 15px; font-weight: bold;">
+        <span class="detail-label">Amount Due (NGN)</span>
+        <span class="detail-value" style="color: #10b981;">₦ ${priceNGN.toLocaleString()}</span>
+      </div>
+      <div class="info-section" style="text-align: center; margin-top: 10px;">
+        <a href="${paymentLinkNGN}" style="display: inline-block; padding: 12px 24px; background-color: #3b82f6; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px;">
+          Pay with Paystack (NGN)
+        </a>
+        <p style="margin-top: 10px; font-size: 12px; color: #6b7280; word-break: break-all;">
+          Or copy link: <a href="${paymentLinkNGN}" style="color: #3b82f6;">${paymentLinkNGN}</a>
+        </p>
+      </div>
+      `;
+    }
+
+    // if (priceUSD > 0 && paymentLinkUSD) {
+    //   paymentDetailsHtml += `
+    //   <div class="detail-row" style="margin-top: 15px;">
+    //     <span class="detail-label">Amount Due (USD)</span>
+    //     <span class="detail-value">$ ${priceUSD.toLocaleString()}</span>
+    //   </div>
+    //   <div class="info-section" style="text-align: center; margin-top: 10px;">
+    //     <a href="${paymentLinkUSD}" style="display: inline-block; padding: 12px 24px; background-color: #f59e0b; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px;">
+    //       Pay with Flutterwave (USD)
+    //     </a>
+    //     <p style="margin-top: 10px; font-size: 12px; color: #6b7280; word-break: break-all;">
+    //       Or copy link: <a href="${paymentLinkUSD}" style="color: #f59e0b;">${paymentLinkUSD}</a>
+    //     </p>
+    //   </div>
+    //   `;
+    // }
+
+    const content = `
+    <div class="header">
+      <img src="${this.getLogo()}" alt="Logo" class="logo">
+    </div>
+
+    <h1 class="title" style="color: #3b82f6;">Complete Your Seat Reservation</h1>
+
+    <p class="subtitle">
+      Hi ${user.name}, you are one step away from securing your seat for 
+      <strong>The Morayo Show</strong> on the following date(s): ${datesStr}.
+    </p>
+
+    <div class="details-section">
+      <h2 class="details-title">Payment Details</h2>
+      <p style="font-size: 14px; color: #4b5563;">Please choose your preferred currency to complete the payment:</p>
+      ${paymentDetailsHtml}
+    </div>
+    
+    <div class="info-section">
+      <p style="font-size: 14px; color: #ef4444; font-weight: bold;">
+        Action Required: If payment is not made within 30 minutes, your reservation will expire and the seats will be released.
+      </p>
+      <p style="font-size: 14px; color: #4b5563;">
+        Note: Your reservation is not completely secured until payment is successfully made. Once paid, you will receive your ticket email.
+      </p>
+    </div>
+
+    <div class="footer">
+      <p>Warm regards,<br/><strong>The Morayo Show Team</strong></p>
+      <p>This email was sent to ${user.email}</p>
+    </div>
+  `;
+
+    return this.generateBaseTemplate(content);
+  }
+
   // Welcome Email Template
   // generateWelcomeEmail(data) {
   //   const {
@@ -764,6 +973,39 @@ export class EmailTemplateBuilder {
 
   //   return this.generateBaseTemplate(content);
   // }
+
+  // Payment Expiration Email Template
+  generatePaymentExpirationEmail(user: { name: string; email: string }, eventDates: Date[]) {
+    const datesStr = eventDates.map(d => formatDate(d)).join(", ");
+    
+    const content = `
+    <div class="header">
+      <img src="${this.getLogo()}" alt="Logo" class="logo">
+    </div>
+
+    <h1 class="title" style="color: #ef4444;">Reservation Expired</h1>
+
+    <p class="subtitle">
+      Hi ${user.name}, your seat reservation for <strong>The Morayo Show</strong> on ${datesStr} has expired.
+    </p>
+
+    <div class="info-section">
+      <p style="font-size: 14px; color: #4b5563;">
+        Because payment was not completed within the 30-minute window, the seats have been released back to the available pool. 
+      </p>
+      <p style="font-size: 14px; color: #4b5563; margin-top: 15px;">
+        If you would still like to attend, please visit our website to start a new reservation.
+      </p>
+    </div>
+
+    <div class="footer">
+      <p>Need help? <a href="mailto:info@mabstudios.com">Contact our support team</a>.</p>
+      <p>&copy; ${new Date().getFullYear()} The Morayo Show. All rights reserved.</p>
+    </div>
+    `;
+    
+    return this.generateBaseTemplate(content);
+  }
 }
 
 // Usage Examples and Export

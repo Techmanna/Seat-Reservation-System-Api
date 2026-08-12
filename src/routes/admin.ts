@@ -4,6 +4,8 @@ import { UserModel } from "../models/User";
 import { EventModel } from "../models/Event";
 import { BookingModel } from "../models/Booking";
 import { SubscriptionModel } from "../models/Subscription";
+import { BookingPaymentModel } from "../models/BookingPayment";
+
 import { NotificationService } from "../services/NotificationService";
 import { startOfDay, endOfDay, subDays, isBefore, isAfter, differenceInCalendarDays, addDays } from "date-fns";
 import { validateRequest } from "../middleware/validateRequest";
@@ -111,8 +113,29 @@ router.get("/revenue", async (req, res) => {
         break;
     }
 
+
     // Fetch all active subs once
     const allActiveSubs = await SubscriptionModel.find({ status: 'active' }).lean();
+
+    // Fetch all successful booking payments
+    const allSuccessfulPayments = await BookingPaymentModel.find({ status: 'successful' }).lean();
+    
+    // Ticket revenue calculation (USD)
+    const sumTicketUsd = (payments: typeof allSuccessfulPayments) =>
+      payments.reduce((acc, p) => {
+         // rough conversion if NGN
+         if (p.currency === 'NGN') return acc + (p.amount / 1500);
+         return acc + p.amount;
+      }, 0);
+
+    const currentPayments = allSuccessfulPayments.filter(p => p.updatedAt && p.updatedAt >= startDate);
+    const previousPayments = allSuccessfulPayments.filter(p => p.updatedAt && p.updatedAt >= previousStartDate && p.updatedAt < startDate);
+
+    const currentTicketRev = sumTicketUsd(currentPayments);
+    const previousTicketRev = sumTicketUsd(previousPayments);
+    const ticketRevDiff = currentTicketRev - previousTicketRev;
+    const ticketRevPct = previousTicketRev > 0 ? (ticketRevDiff / previousTicketRev) * 100 : 0;
+
 
     const currentSubs  = allActiveSubs.filter(s => s.createdAt && s.createdAt >= startDate);
     const previousSubs = allActiveSubs.filter(s => s.createdAt && s.createdAt >= previousStartDate && s.createdAt < startDate);
@@ -196,8 +219,15 @@ router.get("/revenue", async (req, res) => {
       success: true,
       data: {
         range,
+
         metrics: {
+          ticketRevenue: {
+            total: Math.round(currentTicketRev * 100) / 100,
+            percentage: Math.abs(Math.round(ticketRevPct * 10) / 10),
+            trend: ticketRevDiff >= 0 ? 'up' : 'down'
+          },
           mrr: {
+
             total: Math.round(currentMrr * 100) / 100,
             percentage: Math.abs(Math.round(mrrPct * 10) / 10),
             trend: mrrDiff >= 0 ? 'up' : 'down'
@@ -894,8 +924,8 @@ router.get("/registrations", async (req, res) => {
           as: "hall",
         },
       },
-      { $unwind: "$userInfo" },
-      { $unwind: "$eventInfo" },
+      { $unwind: { path: "$userInfo", preserveNullAndEmptyArrays: true } },
+      { $unwind: { path: "$eventInfo", preserveNullAndEmptyArrays: true } },
       { $unwind: { path: "$hall", preserveNullAndEmptyArrays: true } },
     ];
 
@@ -933,9 +963,10 @@ router.get("/registrations", async (req, res) => {
       $project: {
         id: "$_id",
         ticket_id: "$ticketId",
-        full_name: "$userInfo.name",
-        email: "$userInfo.email",
-        phone: "$userInfo.phone",
+        userId: "$userInfo._id",
+        full_name: { $ifNull: ["$userInfo.name", "Unknown User"] },
+        email: { $ifNull: ["$userInfo.email", "N/A"] },
+        phone: { $ifNull: ["$userInfo.phone", "N/A"] },
         age: {
           $switch: {
             branches: [
@@ -948,12 +979,18 @@ router.get("/registrations", async (req, res) => {
             default: 25,
           },
         },
-        ageRange: "$userInfo.ageRange",
+        ageRange: { $ifNull: ["$userInfo.ageRange", "N/A"] },
         gender: {
-          $concat: [
-            { $toUpper: { $substr: ["$userInfo.gender", 0, 1] } },
-            { $substr: ["$userInfo.gender", 1, -1] },
-          ],
+          $cond: {
+            if: { $and: [{ $ne: ["$userInfo.gender", null] }, { $ne: ["$userInfo.gender", ""] }] },
+            then: {
+              $concat: [
+                { $toUpper: { $substr: ["$userInfo.gender", 0, 1] } },
+                { $substr: ["$userInfo.gender", 1, -1] },
+              ],
+            },
+            else: "N/A"
+          }
         },
         seat_number: {
           $cond: {
@@ -2098,5 +2135,76 @@ router.delete("/users/:id", async (req, res) => {
   }
 });
 
+
+/**
+ * @swagger
+ * /admin/retroactive-billing/{hallId}:
+ *   post:
+ *     summary: Trigger retroactive billing for multiple day bookings
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.post("/retroactive-billing/:hallId", async (req, res) => {
+  try {
+    const { hallId } = req.params;
+    
+    // 1. Fetch Hall
+    const hall = await mongoose.model("Hall").findById(hallId);
+    if (!hall || !hall.isPaymentEnabled || !hall.isMultipleDaysBookingEnabled) {
+       res.status(400).json({ success: false, message: "Hall does not support retroactive billing." });
+       return;
+    }
+
+    // 2. Fetch all unpaid bookings for this hall
+    const bookings = await BookingModel.find({
+      hall: hallId,
+      status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+      paymentStatus: { $ne: 'paid' }
+    });
+
+    // 3. Group by user
+    const userBookings = new Map<string, any[]>();
+    for (const booking of bookings) {
+      const userId = booking.user.toString();
+      if (!userBookings.has(userId)) {
+        userBookings.set(userId, []);
+      }
+      userBookings.get(userId)!.push(booking);
+    }
+
+    let processedUsers = 0;
+    const paymentService = new (require("../services/BookingPaymentService").BookingPaymentService)();
+
+    // 4. Generate payment links for users with multiple bookings
+    for (const [userId, userBookingsList] of userBookings.entries()) {
+      if (userBookingsList.length > 1) { // Apply to existing users who booked multiple days
+         const bookingIds = userBookingsList.map(b => b._id.toString());
+         const linkResult = await paymentService.generatePaymentLink(userId, hallId, bookingIds, true, true); // sendEmail=true, isRetroactive=true
+
+         if (linkResult.success) {
+            // Set 1 week expiry for these bookings
+            const expiryDate = new Date();
+            expiryDate.setDate(expiryDate.getDate() + 7);
+
+            await BookingModel.updateMany(
+              { _id: { $in: bookingIds } },
+              { $set: { paymentExpiresAt: expiryDate } }
+            );
+            processedUsers++;
+         }
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Retroactive billing emails sent to ${processedUsers} users.`,
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 export default router;
+
 

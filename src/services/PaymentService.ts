@@ -108,4 +108,35 @@ export class PaymentService {
             throw error;
         }
     }
+
+    /**
+     * Paystack Initialization (for NGN)
+     */
+    public static async initializePaystackPayment(payload: {
+        email: string;
+        amount: number; // Amount should be in kobo (multiply by 100)
+        reference: string;
+        callback_url: string;
+        metadata?: any;
+    }): Promise<any> {
+        try {
+            const response = await fetch(`https://api.paystack.co/transaction/initialize`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.paystackSecret}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json() as any;
+            if (!response.ok || !data.status) {
+                throw new Error(data.message || 'Paystack initialization failed');
+            }
+            return data.data; // contains the 'authorization_url' property for redirection
+        } catch (error: any) {
+            logger.error("[PaymentService] Paystack Init error:", error.message);
+            throw error;
+        }
+    }
 }

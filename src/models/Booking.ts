@@ -4,8 +4,7 @@ import { Booking, BookingStatus } from '../types/index';
 const bookingSchema = new Schema<Booking>({
   ticketId: {
     type: String,
-    required: true,
-    unique: true
+    required: true
   },
   user: {
     type: mongoose.Schema.Types.ObjectId,
@@ -63,6 +62,19 @@ const bookingSchema = new Schema<Booking>({
   priorityScore: {
     type: Number,
     default: 0
+  },
+  paymentStatus: {
+    type: String,
+    enum: ['not_required', 'pending', 'paid'],
+    default: 'not_required'
+  },
+  paymentReference: {
+    type: String,
+    required: false
+  },
+  paymentExpiresAt: {
+    type: Date,
+    required: false
   }
 }, {
   timestamps: true

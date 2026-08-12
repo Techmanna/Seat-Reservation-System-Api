@@ -123,6 +123,29 @@ const hallSchema = new Schema<Hall>(
       type: Number,
       default: 60,
     },
+    isPaymentEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    paymentPriceNGN: {
+      type: Number,
+      default: 0,
+    },
+    paymentPriceUSD: {
+      type: Number,
+      default: 0,
+    },
+    isMultipleDaysBookingEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    discountConfig: {
+      minDays: { type: Number, default: 0 },
+      discountAmountNGN: { type: Number, default: 0 },
+      discountAmountUSD: { type: Number, default: 0 },
+      existingUserPriceNGN: { type: Number, default: 0 },
+      existingUserPriceUSD: { type: Number, default: 0 },
+    }
   },
   {
     timestamps: true,

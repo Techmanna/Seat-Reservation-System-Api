@@ -29,6 +29,15 @@ export class WebhookController {
                 const userId = data.metadata?.userId || data.customer.id;
                 const timezone = data.metadata?.timezone || 'Africa/Lagos';
 
+                // Check if it's a booking payment
+                if (data.metadata?.type === 'booking_payment') {
+                    const { BookingPaymentService } = require('../services/BookingPaymentService');
+                    const paymentService = new BookingPaymentService();
+                    await paymentService.verifyPayment(data.reference);
+                    res.status(200).send('Webhook Handled - Booking Payment');
+                    return;
+                }
+
                 // Determine tier from amount
                 let tier = SubscriptionTier.TIER_1_NGN;
                 if (data.amount === 650000) tier = SubscriptionTier.TIER_2_NGN;
@@ -153,6 +162,15 @@ export class WebhookController {
                 const amount = verifiedData.amount;
                 const currency = verifiedData.currency;
                 const txRef = verifiedData.tx_ref || verifiedData.txRef;
+
+                // Check if it's a booking payment
+                if (verifiedData.meta?.type === 'booking_payment') {
+                    const { BookingPaymentService } = require('../services/BookingPaymentService');
+                    const paymentService = new BookingPaymentService();
+                    await paymentService.verifyPayment(txRef);
+                    res.status(200).send('Webhook Handled - Booking Payment');
+                    return;
+                }
 
                 // 3. Idempotency: Check if transaction already processed
                 const existingTx = await TransactionModel.findOne({ providerTransactionId: transactionId });

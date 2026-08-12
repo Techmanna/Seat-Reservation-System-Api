@@ -10,6 +10,7 @@ import bookingRoutes from './routes/booking';
 import settingsRoutes from './routes/settings';
 import adminRoutes from './routes/admin';
 import hallRoutes from './routes/hall';
+import paymentRoutes from './routes/payment';
 import config from './config/environment';
 import appHealth from './routes/AppHealth';
 import authRoute from './routes/auth';
@@ -137,6 +138,7 @@ app.use('/api/auth', authRoute);
 app.use('/api/admin', authenticateAdmin, adminRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
+app.use('/api/payments', paymentRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/notifications', notificationRoutes);
 

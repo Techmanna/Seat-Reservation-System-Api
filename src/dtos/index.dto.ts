@@ -27,9 +27,10 @@ export const cancelReservationParamsSchema = Joi.object({
 
 export const bookingSchema = Joi.object({
   hallId: Joi.string().optional(),
-  eventDate: Joi.date().iso().required(),
-  seatNumbers: Joi.array().items(Joi.number().positive()).min(1).required(),
-  seatLabels: Joi.array().items(Joi.string()).min(1).required(),
+  eventDates: Joi.array().items(Joi.date().iso()).optional(),
+  eventDate: Joi.date().iso().optional(),
+  seatNumbers: Joi.array().items(Joi.number().positive()).optional(),
+  seatLabels: Joi.array().items(Joi.string()).optional(),
   name: Joi.string().trim().min(2).max(100).required(),
   email: Joi.string().email().required(),
   phone: Joi.string().pattern(/^[0-9+\-\s()]+$/).min(10).max(20).required(),

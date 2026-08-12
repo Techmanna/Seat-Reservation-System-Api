@@ -57,6 +57,19 @@ export interface Hall {
     lowFrequencyPeriodDays: number;
     inactivityPeriodDays: number;
     
+    isPaymentEnabled?: boolean;
+    paymentPriceNGN?: number;
+    paymentPriceUSD?: number;
+    
+    isMultipleDaysBookingEnabled?: boolean;
+    discountConfig?: {
+        minDays: number;
+        discountAmountNGN: number;
+        discountAmountUSD: number;
+        existingUserPriceNGN: number;
+        existingUserPriceUSD: number;
+    };
+    
     createdAt?: Date;
     updatedAt?: Date;
 }
@@ -107,6 +120,23 @@ export interface Booking {
     attendedAt?: Date;
     category?: 'priority' | 'general';
     priorityScore?: number;
+    paymentStatus?: 'not_required' | 'pending' | 'paid';
+    paymentReference?: string;
+    paymentExpiresAt?: Date;
+}
+
+export interface BookingPayment extends Document {
+    user: mongoose.Schema.Types.ObjectId | User;
+    hall: mongoose.Schema.Types.ObjectId | Hall;
+    bookings: (mongoose.Schema.Types.ObjectId | Booking)[];
+    amount: number;
+    currency: string;
+    status: 'pending' | 'successful' | 'failed';
+    paymentReference?: string;
+    paymentLink?: string;
+    provider: 'paystack' | 'flutterwave';
+    createdAt?: Date;
+    updatedAt?: Date;
 }
 
 // export interface Admin {
@@ -179,8 +209,9 @@ export interface SystemSettings {
 
 export interface BookingRequest {
     hallId?: string; // Optional for backward compatibility, defaults to main hall
-    eventDate: string|Date;
-    seatNumbers: number[];
+    eventDate?: string|Date; // Optional if eventDates is provided
+    eventDates?: string[] | Date[];
+    seatNumbers?: number[];
     name: string;
     email: string;
     phone: string;

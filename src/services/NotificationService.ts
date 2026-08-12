@@ -74,6 +74,22 @@ export class NotificationService {
     }
   }
 
+
+  async sendGroupedBookingConfirmationEmail(user: User, bookings: Booking[]): Promise<void> {
+    if (!bookings || bookings.length === 0) return;
+    const emailTemplates = new EmailTemplateBuilder();
+    const html = emailTemplates.generateGroupedBookingConfirmation(bookings);
+
+    const mailOptions = {
+      from: config.mail.from,
+      to: user.email,
+      subject: 'Booking Confirmation - The Morayo Show',
+      html,
+    };
+
+    await sendEmail(mailOptions);
+  }
+
   async sendBookingConfirmationEmail(user: User, booking: Booking, event: any): Promise<void> {
     const emailTemplates = new EmailTemplateBuilder();
     const html = emailTemplates.generateBookingConfirmation(booking);
@@ -123,6 +139,28 @@ export class NotificationService {
     await sendEmail({
       to: user.email,
       subject: "Your Booking has been Confirmed!",
+      html,
+    });
+  }
+
+  async sendPaymentLinkEmail(user: any, priceNGN: number, priceUSD: number, paymentLinkNGN: string | undefined, paymentLinkUSD: string | undefined, eventDates: Date[], extraDetails?: { hallName?: string, originalPriceNGN?: number, numBookings?: number }): Promise<void> {
+    const emailTemplates = new EmailTemplateBuilder();
+    const html = emailTemplates.generatePaymentLinkEmail(user, priceNGN, priceUSD, paymentLinkNGN, paymentLinkUSD, eventDates, extraDetails);
+
+    await sendEmail({
+      to: user.email,
+      subject: "Complete your Booking Payment",
+      html,
+    });
+  }
+
+  async sendBookingExpirationEmail(user: any, eventDates: Date[]): Promise<void> {
+    const emailTemplates = new EmailTemplateBuilder();
+    const html = emailTemplates.generatePaymentExpirationEmail(user, eventDates);
+
+    await sendEmail({
+      to: user.email,
+      subject: "Reservation Expired - The Morayo Show",
       html,
     });
   }
