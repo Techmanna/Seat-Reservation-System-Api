@@ -8,6 +8,9 @@ const controller = new BookingPaymentController();
 // Verify payment (public/user accessible)
 router.post("/verify", controller.verifyPayment.bind(controller));
 
+// Public endpoint to get payment details from base reference
+router.get("/details/:reference", controller.getPaymentDetails.bind(controller));
+
 // Proxy checkout link
 router.get("/checkout/:reference", controller.checkoutProxy.bind(controller));
 

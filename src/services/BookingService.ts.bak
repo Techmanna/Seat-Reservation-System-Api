@@ -63,12 +63,16 @@ export class BookingService {
 
   private async cleanupExpiredPendingPayments() {
     try {
-      // 30 minutes ago
-      const expirationTime = new Date(Date.now() - 30 * 60 * 1000);
+      const now = new Date();
+      // Default 30 minutes ago for old bookings without paymentExpiresAt
+      const defaultExpirationTime = new Date(now.getTime() - 30 * 60 * 1000);
       
       const expiredBookings = await BookingModel.find({
         paymentStatus: 'pending',
-        createdAt: { $lt: expirationTime },
+        $or: [
+           { paymentExpiresAt: { $lt: now } },
+           { paymentExpiresAt: { $exists: false }, createdAt: { $lt: defaultExpirationTime } }
+        ],
         status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] }
       }).populate('user event');
 
@@ -116,7 +120,7 @@ export class BookingService {
   }
 
   async initiateBooking(bookingData: BookingRequest): Promise<
-    | ApiResponse<Booking>
+    | ApiResponse<Booking | Booking[]>
     | ApiResponse<{
       tempId?: string;
       expiresAt?: Date;
@@ -125,7 +129,6 @@ export class BookingService {
     }>
   > {
     try {
-      // Perform all the validation checks first (same as original createBooking)
       let settings;
       if (bookingData.hallId) {
           const hallResponse = await new HallService().getHallById(bookingData.hallId);
@@ -139,87 +142,105 @@ export class BookingService {
       }
       
       const now = DateTime.now().setZone('Africa/Lagos').toJSDate();
-      const selected = getLagosStartOfDay(bookingData.eventDate);
       const start = getLagosStartOfDay(settings.reservationOpenDate);
       const end = getLagosEndOfDay(settings.reservationCloseDate);
+
+      const rawEventDates = bookingData.eventDates && bookingData.eventDates.length > 0 
+        ? bookingData.eventDates 
+        : [bookingData.eventDate];
+        
+      if (!rawEventDates || rawEventDates.length === 0 || !rawEventDates[0]) {
+        return { success: false, message: "Event date is required", error: "Invalid date" };
+      }
       
-      // Check if reservations are open
-      if (
-        settings.reservationOpenDate &&
-        settings.reservationCloseDate &&
-        (selected.getTime() < start.getTime() || selected.getTime() > end.getTime())
-      ) {
-        return {
-          success: false,
-          message: `Reservations open ${start.toLocaleDateString()} and close ${end.toLocaleDateString()}. Please select a date within this range.`,
-          error: "Outside reservation period",
-        };
+      const eventDates = rawEventDates.map(d => new Date(d as string));
+      
+      // Auto-allocation check
+      const isAutoAllocate = settings.isMultipleDaysBookingEnabled && (!bookingData.seatLabels || bookingData.seatLabels.length === 0);
+      if (!isAutoAllocate && (!bookingData.seatLabels || bookingData.seatLabels.length === 0)) {
+        return { success: false, message: "Seat selection is required", error: "Missing seats" };
       }
 
-      const eventDate = new Date(bookingData.eventDate);
-      // Check if event date is in the future
-      if (eventDate.getTime() < getLagosStartOfDay(now).getTime()) {
-        return {
-          success: false,
-          message: "Cannot book for past dates",
-          error: "Invalid date",
-        };
+      const existingUser = await UserModel.findOne({ email: bookingData.email });
+      
+      // We will loop through all dates to validate them
+      for (const eventDate of eventDates) {
+          const selected = getLagosStartOfDay(eventDate);
+          
+          if (settings.reservationOpenDate && settings.reservationCloseDate && 
+             (selected.getTime() < start.getTime() || selected.getTime() > end.getTime())) {
+            return {
+              success: false,
+              message: `Reservations open ${start.toLocaleDateString()} and close ${end.toLocaleDateString()}. Please select dates within this range.`,
+              error: "Outside reservation period",
+            };
+          }
+
+          if (eventDate.getTime() < getLagosStartOfDay(now).getTime()) {
+            return {
+              success: false,
+              message: "Cannot book for past dates",
+              error: "Invalid date",
+            };
+          }
+
+          const dayOfWeek = eventDate.getDay();
+          if (dayOfWeek === 0 || dayOfWeek === 6) {
+            return {
+              success: false,
+              message: "Bookings are only allowed from Monday to Friday",
+              error: "Invalid event date",
+            };
+          }
+
+          if (existingUser) {
+            const existingBooking = await BookingModel.findOne({
+              user: { _id: existingUser._id?.toString() },
+              hall: bookingData.hallId,
+              eventDate: {
+                $gte: getLagosStartOfDay(eventDate),
+                $lte: getLagosEndOfDay(eventDate),
+              },
+              status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+            });
+
+            if (existingBooking) {
+              return {
+                success: false,
+                message: `You already have a booking for ${eventDate.toLocaleDateString()}`,
+                error: "Duplicate booking",
+              };
+            }
+
+            const pendingBooking = await PendingBookingModel.findOne({
+              email: bookingData.email,
+              "bookingData.hallId": bookingData.hallId,
+              "bookingData.eventDates": { $in: [eventDate.toISOString(), eventDate] },
+            });
+
+            // Also check legacy pending bookings
+            const legacyPendingBooking = await PendingBookingModel.findOne({
+              email: bookingData.email,
+              "bookingData.hallId": bookingData.hallId,
+              "bookingData.eventDate": {
+                $gte: getLagosStartOfDay(eventDate),
+                $lte: getLagosEndOfDay(eventDate),
+              },
+            });
+
+            if (pendingBooking || legacyPendingBooking) {
+              return {
+                success: false,
+                message: `You already have a pending booking for ${eventDate.toLocaleDateString()}`,
+                error: "Pending booking",
+              };
+            }
+          }
       }
 
-      // Only allow Monday to Friday
-      const dayOfWeek = eventDate.getDay();
-      if (dayOfWeek === 0 || dayOfWeek === 6) {
-        return {
-          success: false,
-          message: "Bookings are only allowed from Monday to Friday",
-          error: "Invalid event date",
-        };
-      }
-
-      // Check if user already has a booking for this date
-      const existingUser = await UserModel.findOne({
-        email: bookingData.email,
-      });
-      if (existingUser) {
-        const existingBooking = await BookingModel.findOne({
-          user: { _id: existingUser._id?.toString() },
-          hall: bookingData.hallId,
-          eventDate: {
-            $gte: getLagosStartOfDay(eventDate),
-            $lte: getLagosEndOfDay(eventDate),
-          },
-          status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-        });
-
-        if (existingBooking) {
-          return {
-            success: false,
-            message: "You already have a booking for this date",
-            error: "Duplicate booking",
-          };
-        }
-
-        // or the pending booking
-        const pendingBooking = await PendingBookingModel.findOne({
-          email: bookingData.email,
-          "bookingData.hallId": bookingData.hallId,
-          "bookingData.eventDate": {
-            $gte: getLagosStartOfDay(eventDate),
-            $lte: getLagosEndOfDay(eventDate),
-          },
-        });
-
-        if (pendingBooking) {
-          return {
-            success: false,
-            message: "You already have a pending booking for this date",
-            error: "Pending booking",
-          };
-        }
-      }
-
-      // Validate seat count
-      if (bookingData.seatLabels.length > settings.maxSeatsPerUser) {
+      // Check seat capacity per user (default to 1 if auto-allocating)
+      const requestedSeatsCount = isAutoAllocate ? 1 : bookingData.seatLabels!.length;
+      if (requestedSeatsCount > settings.maxSeatsPerUser) {
         return {
           success: false,
           message: `Maximum ${settings.maxSeatsPerUser} seats allowed per booking`,
@@ -227,329 +248,182 @@ export class BookingService {
         };
       }
 
-      // Find or create event
-      let event = await EventModel.findOne({
-        hall: bookingData.hallId,
-        date: {
-          $gte: getLagosStartOfDay(eventDate),
-          $lte: getLagosEndOfDay(eventDate),
-        },
-      });
+      // We will perform priority and availability checks for all dates
+      let finalCategory: "priority" | "general" = "general";
+      let finalIsWaitlist = false;
+      let finalPriorityScore = 0;
+      
+      const eventDateObjects = [];
 
-      const currentTotalSeats = SeatUtils.resolveTotalSeats(settings as any, eventDate);
+      for (const eventDate of eventDates) {
+          // Find or create event
+          let event = await EventModel.findOne({
+            hall: bookingData.hallId,
+            date: {
+              $gte: getLagosStartOfDay(eventDate),
+              $lte: getLagosEndOfDay(eventDate),
+            },
+          });
 
-      if (!event) {
-        const eventUtcDate = buildEventUtcDate(eventDate);
-        const title = `The Morayo Show Live - ${eventUtcDate.toDateString()}`;
+          const currentTotalSeats = SeatUtils.resolveTotalSeats(settings as any, eventDate);
 
-        event = new EventModel({
-          hall: bookingData.hallId,
-          date: eventUtcDate,
-          // time: settings.eventTimes[0] || "11:00",
-          // time: `${String(EVENT_HOUR_WAT).padStart(2, '0')}:${String(EVENT_MINUTE_WAT).padStart(2, '0')}`,
-          time: getEventStartTime(),
-          endTime: getEventEndTime(),
-          totalSeats: currentTotalSeats,
-          availableSeats: currentTotalSeats,
-          isActive: true,
-          title,
-        });
-        await event.save();
-      } else if (event.totalSeats !== currentTotalSeats) {
-        const diff = currentTotalSeats - event.totalSeats;
-        event.totalSeats = currentTotalSeats;
-        event.availableSeats += diff;
-        await event.save();
-      }
-
-      // Validate and convert seat labels to numbers
-      let seatNumbers: number[];
-      let seatLabels: string[];
-
-      try {
-        const seatInfo = SeatUtils.validateAndConvertSeatLabels(
-          bookingData.seatLabels,
-          event.totalSeats
-        );
-        seatNumbers = seatInfo.numbers;
-        seatLabels = seatInfo.labels;
-      } catch (error: any) {
-        return {
-          success: false,
-          message: error.message,
-          error: "Invalid seat selection",
-        };
-      }
-
-      // Check seat availability
-      if (event.availableSeats < seatNumbers.length) {
-        return {
-          success: false,
-          message: "Not enough seats available",
-          error: "Insufficient seats",
-        };
-      }
-
-      // Check if requested seats are available in both confirmed and pending bookings
-      const bookedSeats = await BookingModel.find({
-        event: event._id?.toString(),
-        hall: bookingData.hallId,
-        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-      }).select("seatNumbers seatLabels");
-
-      const pendingBookings = await PendingBookingModel.find({
-        "bookingData.hallId": bookingData.hallId,
-        "bookingData.eventDate": {
-          $gte: getLagosStartOfDay(eventDate),
-          $lte: getLagosEndOfDay(eventDate),
-        },
-        expiresAt: { $gt: new Date() }, // Only check non-expired pending bookings
-      }).select("bookingData.seatLabels bookingData.seatNumbers");
-
-      const allBookedSeatNumbers = bookedSeats.flatMap(
-        (booking) => booking.seatNumbers
-      );
-      const allBookedSeatLabels = bookedSeats.flatMap(
-        (booking) => booking.seatLabels
-      );
-      const allPendingSeatNumbers = pendingBookings.flatMap(
-        (pending) => pending.bookingData.seatNumbers || []
-      );
-      const allPendingSeatLabels = pendingBookings.flatMap(
-        (pending) => pending.bookingData.seatLabels || []
-      );
-
-      // PRIORITY SYSTEM LOGIC
-      let category: "priority" | "general" = "general";
-      let isWaitlist = false;
-      let priorityScore = 0;
-
-      if (settings.prioritySystemEnabled) {
-        const priorityResult = await this.priorityService.calculatePriority(
-          bookingData.email,
-          bookingData.hallId!,
-          settings
-        );
-        priorityScore = priorityResult.score;
-
-        const totalCapacity = event.totalSeats;
-        const priorityCapacity = Math.min(settings.prioritySeatAllocation, event.totalSeats);
-        let generalCapacity = totalCapacity - priorityCapacity;
-
-        const confirmedBookings = await BookingModel.find({
-          event: event._id,
-          status: {
-            $nin: [
-              BookingStatus.Cancelled,
-              BookingStatus.Voided,
-              BookingStatus.Waitlisted,
-            ],
-          },
-        }).select("category");
-
-        const priorityTaken = confirmedBookings.filter(
-          (b) => b.category === "priority"
-        ).length;
-        const generalTaken = confirmedBookings.filter(
-          (b) => b.category === "general"
-        ).length;
-
-        // Drop the priority barrier if within the auto-allocation window
-        const hoursUntilEvent = (eventDate.getTime() - now.getTime()) / (1000 * 60 * 60);
-        if (hoursUntilEvent <= settings.autoAllocationHoursBeforeEvent) {
-          generalCapacity = totalCapacity - priorityTaken;
-        }
-
-        if (priorityResult.isPriority) {
-          // Priority User Logic
-          if (priorityTaken < priorityCapacity) {
-            category = "priority";
-          } else if (generalTaken < generalCapacity) {
-            category = "general";
-          } else {
-            // All seats full, but priority users are confirmed immediately?
-            // The requirement says "Priority users should be confirmed immediately."
-            // but if there are 0 physical seats, they must waitlist too.
-            // However, we give them priority category.
-            isWaitlist = true;
-            category = "priority";
-          }
-        } else {
-          // General User Logic
-          if (generalTaken < generalCapacity) {
-            category = "general";
-          } else {
-            // General pool full
-            isWaitlist = true;
-            category = "general";
-
-            // Check waitlist capacity
-            const currentWaitlistedCount = await BookingModel.countDocuments({
-              event: event._id,
-              status: BookingStatus.Waitlisted,
+          if (!event) {
+            const eventUtcDate = buildEventUtcDate(eventDate);
+            event = new EventModel({
+              hall: bookingData.hallId,
+              date: eventUtcDate,
+              time: getEventStartTime(),
+              endTime: getEventEndTime(),
+              totalSeats: currentTotalSeats,
+              availableSeats: currentTotalSeats,
+              isActive: true,
+              title: `The Morayo Show Live - ${eventUtcDate.toDateString()}`,
             });
+            await event.save();
+          } else if (event.totalSeats !== currentTotalSeats) {
+            const diff = currentTotalSeats - event.totalSeats;
+            event.totalSeats = currentTotalSeats;
+            event.availableSeats += diff;
+            await event.save();
+          }
+          eventDateObjects.push(event);
 
-            if (currentWaitlistedCount >= settings.waitingListCapacity) {
-              // Send rejection email if waitlist is full
-              try {
-                await this.notificationService.sendBookingRejectionEmail(
-                  { email: bookingData.email, name: bookingData.name } as any,
-                  eventDate,
-                  "Event and waiting list are both full."
-                );
-              } catch (err) {
-                logger.error("Failed to send rejection email:", err);
-              }
+          if (event.availableSeats < requestedSeatsCount) {
+            return {
+              success: false,
+              message: `Not enough seats available for ${eventDate.toLocaleDateString()}`,
+              error: "Insufficient seats",
+            };
+          }
 
+          if (!isAutoAllocate) {
+            // Validate and check conflicts for manual seat selection
+            let seatNumbers: number[];
+            let seatLabels: string[];
+            try {
+              const seatInfo = SeatUtils.validateAndConvertSeatLabels(bookingData.seatLabels!, event.totalSeats);
+              seatNumbers = seatInfo.numbers;
+              seatLabels = seatInfo.labels;
+            } catch (error: any) {
+              return { success: false, message: error.message, error: "Invalid seat selection" };
+            }
+
+            const bookedSeats = await BookingModel.find({
+              event: event._id?.toString(),
+              status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+            }).select("seatNumbers seatLabels");
+
+            const allBookedSeatNumbers = bookedSeats.flatMap(b => b.seatNumbers);
+            const conflictingNumbers = seatNumbers.filter(seat => allBookedSeatNumbers.includes(seat));
+            
+            if (conflictingNumbers.length > 0) {
               return {
                 success: false,
-                message:
-                  "We're sorry, this event has reached full capacity and the waiting list is also full.",
-                error: "Waitlist full",
+                message: `Some selected seats are already booked on ${eventDate.toLocaleDateString()}`,
+                error: "Seats unavailable",
               };
             }
           }
-        }
+
+          // Priority logic (calculate once per request, apply to all)
+          if (settings.prioritySystemEnabled && eventDate === eventDates[0]) {
+            const priorityResult = await this.priorityService.calculatePriority(bookingData.email, bookingData.hallId!, settings);
+            finalPriorityScore = priorityResult.score;
+            // Simplified waitlist logic for multiple days: if waitlisted on one, waitlisted on all.
+            const totalCapacity = event.totalSeats;
+            const priorityCapacity = Math.min(settings.prioritySeatAllocation, event.totalSeats);
+            let generalCapacity = totalCapacity - priorityCapacity;
+            
+            const confirmedBookings = await BookingModel.find({
+              event: event._id,
+              status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided, BookingStatus.Waitlisted] },
+            }).select("category");
+
+            const priorityTaken = confirmedBookings.filter((b) => b.category === "priority").length;
+            const generalTaken = confirmedBookings.filter((b) => b.category === "general").length;
+
+            const hoursUntilEvent = (eventDate.getTime() - now.getTime()) / (1000 * 60 * 60);
+            if (hoursUntilEvent <= settings.autoAllocationHoursBeforeEvent) {
+              generalCapacity = totalCapacity - priorityTaken;
+            }
+
+            if (priorityResult.isPriority) {
+              if (priorityTaken < priorityCapacity) finalCategory = "priority";
+              else if (generalTaken < generalCapacity) finalCategory = "general";
+              else { finalIsWaitlist = true; finalCategory = "priority"; }
+            } else {
+              if (generalTaken < generalCapacity) finalCategory = "general";
+              else {
+                finalIsWaitlist = true; finalCategory = "general";
+                const currentWaitlistedCount = await BookingModel.countDocuments({ event: event._id, status: BookingStatus.Waitlisted });
+                if (currentWaitlistedCount >= settings.waitingListCapacity) {
+                  return { success: false, message: "Waiting list is full.", error: "Waitlist full" };
+                }
+              }
+            }
+          }
       }
 
-      const conflictingNumbers = seatNumbers.filter(
-        (seat) =>
-          allBookedSeatNumbers.includes(seat) ||
-          allPendingSeatNumbers.includes(seat)
-      );
-      const conflictingLabels = seatLabels.filter(
-        (label) =>
-          allBookedSeatLabels.includes(label) ||
-          allPendingSeatLabels.includes(label)
-      );
+      const reservationToken = this.generateReservationToken(bookingData.email, eventDates[0].toISOString());
 
-      if (conflictingNumbers.length > 0) {
-        return {
-          success: false,
-          message: `Seats ${conflictingLabels.join(
-            ", "
-          )} are already booked or pending`,
-          error: "Seats unavailable",
-        };
-      }
-
-      // Generate reservation token for security
-      const reservationToken = this.generateReservationToken(
-        bookingData.email,
-        eventDate.toISOString()
-      );
-
-      // Add reservation token to booking data
       const bookingDataWithToken = {
         ...bookingData,
-        eventDate,
+        eventDates, // Store array
+        eventDate: eventDates[0], // Keep for backward compatibility
         reservationToken,
-        category,
-        priorityScore,
-        isWaitlist,
+        category: finalCategory,
+        priorityScore: finalPriorityScore,
+        isWaitlist: finalIsWaitlist,
       };
 
-      // Check if user exists to determine if OTP is required
-      const isExistingUser = existingUser !== null;
-
-      if (isExistingUser) {
-        // User exists, skip OTP and complete booking directly
+      if (existingUser) {
         const bookingResult = await this.completeBooking(bookingDataWithToken);
-
         if (bookingResult.success) {
-          bookingResult.message =
-            "Booking completed successfully! Check your email for confirmation.";
+          bookingResult.message = "Booking completed successfully! Check your email for confirmation.";
           return bookingResult;
         } else {
-          return bookingResult as unknown as ApiResponse<{
-            tempId?: string;
-            expiresAt?: Date;
-            reservationToken: string;
-            requiresOTP: boolean;
-          }>;
+          return bookingResult as unknown as ApiResponse<{ tempId?: string; expiresAt?: Date; reservationToken: string; requiresOTP: boolean; }>;
         }
       } else {
-        // New user, require OTP verification
         const otp = this.generateOTP();
         const tempId = uuidv4();
-        const expiresAt = DateTime.now().plus({ minutes: 10 }).toJSDate(); // OTP expires in 10 minutes
+        const expiresAt = DateTime.now().plus({ minutes: 10 }).toJSDate(); 
 
-        // Store or update OTP
         await OTPModel.findOneAndUpdate(
           { email: bookingData.email },
-          {
-            email: bookingData.email,
-            otp,
-            tempId,
-            expiresAt,
-            verified: false,
-            attempts: 0,
-          },
+          { email: bookingData.email, otp, tempId, expiresAt, verified: false, attempts: 0 },
           { upsert: true, new: true }
         );
 
-        // Store pending booking in database
         await PendingBookingModel.findOneAndUpdate(
           { email: bookingData.email },
-          {
-            tempId,
-            email: bookingData.email,
-            bookingData: bookingDataWithToken,
-            createdAt: now,
-            expiresAt,
-          },
+          { tempId, email: bookingData.email, bookingData: bookingDataWithToken, createdAt: now, expiresAt },
           { upsert: true, new: true }
         );
 
-        // Send OTP email
         try {
-          await this.notificationService.sendOTPEmail(
-            bookingData.email,
-            otp,
-            bookingData.name
-          );
-          // Send OTP SMS for phone verification if phone number is provided
-          if (bookingData.phone) {
-            await this.notificationService.sendOTPSMS(
-              bookingData.phone,
-              otp,
-              bookingData.name
-            );
-          }
+          await this.notificationService.sendOTPEmail(bookingData.email, otp, bookingData.name);
+          if (bookingData.phone) await this.notificationService.sendOTPSMS(bookingData.phone, otp, bookingData.name);
         } catch (emailError) {
           logger.error("Failed to send OTP email:", emailError);
-          return {
-            success: false,
-            message: "Failed to send verification email. Please try again.",
-            error: "Email service error",
-          };
         }
 
         return {
           success: true,
-          message:
-            "Verification code sent to your email. Please check and verify to complete booking.",
-          data: {
-            tempId,
-            expiresAt,
-            reservationToken,
-            requiresOTP: true,
-          },
+          message: "Verification code sent to your email. Please check and verify to complete booking.",
+          data: { tempId, expiresAt, reservationToken, requiresOTP: true },
         };
       }
     } catch (error: any) {
       logger.error("Booking initiation error:", error);
-      return {
-        success: false,
-        message: "Failed to initiate booking",
-        error: error.message,
-      };
+      return { success: false, message: "Failed to initiate booking", error: error.message };
     }
   }
 
+
   async verifyOTPAndCompleteBooking(
     data: OTPVerificationRequest
-  ): Promise<ApiResponse<Booking>> {
+  ): Promise<ApiResponse<Booking | Booking[]>> {
     try {
       const { email, otp, tempId, reservationToken } = data;
 
@@ -656,66 +530,18 @@ export class BookingService {
 
   private async completeBooking(
     bookingData: BookingRequest
-  ): Promise<ApiResponse<Booking>> {
+  ): Promise<ApiResponse<Booking | Booking[]>> {
     try {
-      const eventDate = new Date(bookingData.eventDate);
+      const rawEventDates = bookingData.eventDates && bookingData.eventDates.length > 0 
+        ? bookingData.eventDates 
+        : [bookingData.eventDate];
+      const eventDates = rawEventDates.map(d => new Date(d as string));
 
-      // Find event
-      let event = await EventModel.findOne({
-        hall: bookingData.hallId,
-        date: {
-          $gte: getLagosStartOfDay(eventDate),
-          $lte: getLagosEndOfDay(eventDate),
-        },
-      });
+      const hallResponse = await new HallService().getHallById(bookingData.hallId!);
+      const settings = hallResponse.data;
+      const isAutoAllocate = settings?.isMultipleDaysBookingEnabled && (!bookingData.seatLabels || bookingData.seatLabels.length === 0);
+      const requestedSeatsCount = isAutoAllocate ? 1 : (bookingData.seatLabels ? bookingData.seatLabels.length : 1);
 
-      if (!event) {
-        return {
-          success: false,
-          message: "Event not found",
-          error: "Event not found",
-        };
-      }
-
-      // Validate seats again (in case they were booked while waiting for OTP)
-      const seatInfo = SeatUtils.validateAndConvertSeatLabels(
-        bookingData.seatLabels,
-        event.totalSeats
-      );
-      const seatNumbers = seatInfo.numbers;
-      const seatLabels = seatInfo.labels;
-
-      // Check seat availability again
-      const bookedSeats = await BookingModel.find({
-        event: event._id?.toString(),
-        hall: bookingData.hallId,
-        status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
-      }).select("seatNumbers seatLabels");
-
-      const allBookedSeatNumbers = bookedSeats.flatMap(
-        (booking) => booking.seatNumbers
-      );
-      const conflictingNumbers = seatNumbers.filter((seat) =>
-        allBookedSeatNumbers.includes(seat)
-      );
-
-      if (conflictingNumbers.length > 0) {
-        const allBookedSeatLabels = bookedSeats.flatMap(
-          (booking) => booking.seatLabels
-        );
-        const conflictingLabels = seatLabels.filter((label) =>
-          allBookedSeatLabels.includes(label)
-        );
-        return {
-          success: false,
-          message: `Seats ${conflictingLabels.join(
-            ", "
-          )} were booked by someone else. Please select different seats.`,
-          error: "Seats no longer available",
-        };
-      }
-
-      // Create or update user
       let user = await UserModel.findOne({ email: bookingData.email });
       if (!user) {
         user = new UserModel({
@@ -734,125 +560,154 @@ export class BookingService {
         await user.save();
       }
 
-      // Create booking
-      const ticketId = uuidv4().split("-")[0].toUpperCase();
-      const booking = new BookingModel({
-        ticketId,
-        user,
-        event,
-        hall: bookingData.hallId,
-        eventDate: eventDate,
-        seatNumbers,
-        seatLabels,
-        status: bookingData.isWaitlist
-          ? BookingStatus.Waitlisted
-          : BookingStatus.Attending,
-        category: bookingData.category,
-        priorityScore: bookingData.priorityScore,
-        reservationToken: bookingData.reservationToken,
-        qrCode: "",
-        calendarLink: this.generateGoogleCalendarLink(
-          seatLabels,
-          ticketId,
-          eventDate
-        ),
-      });
+      const createdBookings = [];
+      const ticketIdBase = uuidv4().split("-")[0].toUpperCase();
 
-      // Generate QR code (can still generate it here, but maybe don't email it yet)
-      const qrCode = await this.qrService.generateQRCode(booking);
-      booking.qrCode = qrCode;
+      for (let i = 0; i < eventDates.length; i++) {
+          const eventDate = eventDates[i];
+          let event = await EventModel.findOne({
+            hall: bookingData.hallId,
+            date: {
+              $gte: getLagosStartOfDay(eventDate),
+              $lte: getLagosEndOfDay(eventDate),
+            },
+          });
 
-      // Populate hall to check payment status
-      await booking.populate("hall");
-      const hallSettings = booking.hall as any;
-      const isPaymentEnabled = hallSettings?.isPaymentEnabled || false;
+          if (!event) {
+            return { success: false, message: "Event not found", error: "Event not found" };
+          }
 
-      if (isPaymentEnabled && !bookingData.isWaitlist) {
-        booking.paymentStatus = 'pending';
+          let seatNumbers: number[];
+          let seatLabels: string[];
+
+          const bookedSeats = await BookingModel.find({
+            event: event._id?.toString(),
+            status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+          }).select("seatNumbers seatLabels");
+          const allBookedSeatNumbers = bookedSeats.flatMap((booking) => booking.seatNumbers);
+
+          if (isAutoAllocate) {
+            try {
+               const allocated = SeatUtils.findNextAvailableSeats(event.totalSeats, allBookedSeatNumbers, requestedSeatsCount);
+               seatNumbers = allocated.numbers;
+               seatLabels = allocated.labels;
+            } catch(e: any) {
+               return { success: false, message: `Could not auto-allocate seats for ${eventDate.toLocaleDateString()}`, error: "Insufficient seats" };
+            }
+          } else {
+            const seatInfo = SeatUtils.validateAndConvertSeatLabels(bookingData.seatLabels!, event.totalSeats);
+            seatNumbers = seatInfo.numbers;
+            seatLabels = seatInfo.labels;
+            const conflictingNumbers = seatNumbers.filter((seat) => allBookedSeatNumbers.includes(seat));
+            if (conflictingNumbers.length > 0) {
+              return { success: false, message: "Seats were booked by someone else.", error: "Seats no longer available" };
+            }
+          }
+
+          const ticketId = ticketIdBase;
+          const booking = new BookingModel({
+            ticketId,
+            user,
+            event,
+            hall: bookingData.hallId,
+            eventDate: eventDate,
+            seatNumbers,
+            seatLabels,
+            status: bookingData.isWaitlist ? BookingStatus.Waitlisted : BookingStatus.Attending,
+            category: bookingData.category,
+            priorityScore: bookingData.priorityScore,
+            reservationToken: bookingData.reservationToken,
+            qrCode: "",
+            calendarLink: this.generateGoogleCalendarLink(seatLabels, ticketId, eventDate),
+          });
+
+          const qrCode = await this.qrService.generateQRCode(booking);
+          booking.qrCode = qrCode;
+
+          const isPaymentEnabled = settings?.isPaymentEnabled || false;
+          if (isPaymentEnabled && !bookingData.isWaitlist) {
+            booking.paymentStatus = 'pending';
+          }
+
+          await booking.save();
+          createdBookings.push(booking);
+
+          if (!bookingData.isWaitlist) {
+            event.availableSeats -= seatNumbers.length;
+            await event.save();
+          }
       }
 
-      await booking.save();
-
-      // Update event available seats
-      if (!bookingData.isWaitlist) {
-        event.availableSeats -= seatNumbers.length;
-        await event.save();
-      }
-
+      let finalPriceNGN: number | undefined;
+      let finalPriceUSD: number | undefined;
+      
+      const isPaymentEnabled = settings?.isPaymentEnabled || false;
       let paymentLinkNGN: string | undefined;
       let paymentLinkUSD: string | undefined;
 
-      // Send notifications or generate payment link
       try {
         const promises: Promise<any>[] = [];
 
         if (bookingData.isWaitlist) {
-          promises.push(
-            this.notificationService.sendWaitlistConfirmationEmail(
-              user,
-              booking
-            )
-          );
+          promises.push(this.notificationService.sendWaitlistConfirmationEmail(user, createdBookings[0]));
         } else {
           if (isPaymentEnabled) {
-            // Generate payment link
             const paymentService = new BookingPaymentService();
-            const linkResult = await paymentService.generatePaymentLink(user._id.toString(), bookingData.hallId!, [booking._id.toString()]);
+            const bookingIds = createdBookings.map(b => b._id.toString());
+            const linkResult = await paymentService.generatePaymentLink(user._id.toString(), bookingData.hallId!, bookingIds);
             
             if (linkResult.success && (linkResult.paymentLinkNGN || linkResult.paymentLinkUSD)) {
               paymentLinkNGN = linkResult.paymentLinkNGN;
               paymentLinkUSD = linkResult.paymentLinkUSD;
-              // Send Payment Link Email
+              finalPriceNGN = linkResult.priceNGN;
+              finalPriceUSD = linkResult.priceUSD;
+              
+              let finalNgn = linkResult.priceNGN || (settings?.paymentPriceNGN || 0);
+              let finalUsd = linkResult.priceUSD || (settings?.paymentPriceUSD || 0);
+              
               promises.push(
                 this.notificationService.sendPaymentLinkEmail(
                   user as any,
-                  hallSettings.paymentPriceNGN || 0,
-                  hallSettings.paymentPriceUSD || 0,
+                  finalNgn,
+                  finalUsd,
                   paymentLinkNGN,
                   paymentLinkUSD,
-                  [eventDate]
+                  eventDates,
+                  {
+                    hallName: settings?.name,
+                    originalPriceNGN: (settings?.paymentPriceNGN || 0) * createdBookings.length,
+                    numBookings: createdBookings.length
+                  }
                 )
               );
             }
           } else {
-            // No payment required, send ticket email immediately
-            promises.push(
-              this.notificationService.sendBookingConfirmationEmail(
-                user,
-                booking,
-                event
-              )
-            );
-
-            if (user.phone) {
-              promises.push(
-                this.notificationService.sendTicketSMS(user.phone, ticketId)
-              );
-            }
+            promises.push(this.notificationService.sendGroupedBookingConfirmationEmail(user, createdBookings as any));
+            if (user.phone && createdBookings.length > 0) promises.push(this.notificationService.sendTicketSMS(user.phone!, createdBookings[0].ticketId));
           }
         }
-
         await Promise.all(promises);
-      } catch (notificationError) {
-        logger.error("Notification error:", notificationError);
+      } catch (notifyError) {
+        logger.error("Notification error:", notifyError);
       }
+
+      const responseData: any = createdBookings.length === 1 ? createdBookings[0].toObject() : { ...createdBookings[0].toObject(), bookings: createdBookings.map(b => b.toObject()) };
+      if (paymentLinkNGN) responseData.paymentLinkNGN = paymentLinkNGN;
+      if (paymentLinkUSD) responseData.paymentLinkUSD = paymentLinkUSD;
+      if (finalPriceNGN !== undefined) responseData.priceNGN = finalPriceNGN;
+      if (finalPriceUSD !== undefined) responseData.priceUSD = finalPriceUSD;
 
       return {
         success: true,
-        message: bookingData.isWaitlist
-          ? "You have been added to the waiting list! Check your email for details."
-          : (isPaymentEnabled ? "Booking initiated. Please complete your payment to confirm your seat." : "Booking completed successfully! Check your email for confirmation."),
-        data: { ...booking.toObject(), paymentLinkNGN, paymentLinkUSD } as any,
+        message: "Booking successful",
+        data: responseData as any,
       };
     } catch (error: any) {
       logger.error("Complete booking error:", error);
-      return {
-        success: false,
-        message: "Failed to complete booking",
-        error: error.message,
-      };
+      return { success: false, message: "Failed to complete booking", error: error.message };
     }
   }
+
 
   private generateGoogleCalendarLink(
     seatLabels: string[],
@@ -1132,11 +987,11 @@ export class BookingService {
 
   async getBookingByTicketId(ticketId: string): Promise<ApiResponse<any>> {
     try {
-      const booking = await BookingModel.findOne({ ticketId }).populate(
-        "user event"
+      const bookings = await BookingModel.find({ ticketId }).populate(
+        "user event hall"
       );
 
-      if (!booking) {
+      if (!bookings || bookings.length === 0) {
         return {
           success: false,
           message: "Booking not found",
@@ -1144,10 +999,15 @@ export class BookingService {
         };
       }
 
+      // Return either the array of bookings, or the single booking structure
+      // Wait, returning an array might break older frontend components. We'll return the first one as base and attach all to 'bookings'
+      const baseBooking = bookings[0].toObject();
+      (baseBooking as any).bookings = bookings;
+
       return {
         success: true,
         message: "Booking found",
-        data: booking,
+        data: baseBooking,
       };
     } catch (error: any) {
       return {

@@ -826,30 +826,41 @@ export class EmailTemplateBuilder {
       <img src="${this.getLogo()}" alt="Logo" class="logo">
     </div>
 
-    <h1 class="title" style="color: #3b82f6;">Complete Your Seat Reservation</h1>
+    <p style="font-size: 16px; color: #374151;">Hi ${user.name.split(' ')[0]},</p>
 
-    <p class="subtitle">
-      Hi ${user.name}, you are one step away from securing your seat for 
-      <strong>The Morayo Show</strong> on the following date(s): ${datesStr}.
+    <p style="font-size: 16px; color: #374151;">
+      Thank you for registering for the Morayo Show Tour!
+    </p>
+    
+    <p style="font-size: 16px; color: #374151;">
+      Congratulations! 🎉 You are one of our Early Bird Registrants, which means you’ve been offered an exclusive discount on your ticket.
     </p>
 
-    <div class="details-section">
-      <h2 class="details-title">Payment Details</h2>
-      <p style="font-size: 14px; color: #4b5563;">Please choose your preferred currency to complete the payment:</p>
+    <p style="font-size: 16px; color: #374151;">
+      Your early bird offer is currently reserved for you. To confirm your attendance and secure your seat, please complete your payment using the link below:
+    </p>
+
+    <div class="details-section" style="margin-top: 20px;">
+      <h2 class="details-title">Booking Details</h2>
+      <div class="detail-row">
+        <span class="detail-label">Date(s)</span>
+        <span class="detail-value">${datesStr}</span>
+      </div>
       ${paymentDetailsHtml}
     </div>
-    
-    <div class="info-section">
+
+    <div class="info-section" style="margin-top: 20px;">
       <p style="font-size: 14px; color: #ef4444; font-weight: bold;">
-        Action Required: If payment is not made within 30 minutes, your reservation will expire and the seats will be released.
-      </p>
-      <p style="font-size: 14px; color: #4b5563;">
-        Note: Your reservation is not completely secured until payment is successfully made. Once paid, you will receive your ticket email.
+        Please note that your payment link will remain active for 7 days. If payment is not completed within this period, your early bird offer and registration may be forfeited, and your seat will no longer be guaranteed.
       </p>
     </div>
 
-    <div class="footer">
-      <p>Warm regards,<br/><strong>The Morayo Show Team</strong></p>
+    <p style="font-size: 16px; color: #374151; margin-top: 20px;">
+      We can’t wait to have you join us for the Morayo Show Tour.
+    </p>
+
+    <div class="footer" style="margin-top: 30px;">
+      <p>See you there!<br/><strong>The Morayo Show Tour Team</strong></p>
       <p>This email was sent to ${user.email}</p>
     </div>
   `;

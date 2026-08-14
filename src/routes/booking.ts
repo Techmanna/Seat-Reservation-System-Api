@@ -220,4 +220,47 @@ router.post('/cancel', validateRequest(cancelReservationParamsSchema, 'body'), a
   }
 });
 
+// Manage Booking OTP
+router.post('/otp/send', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      res.status(400).json({ success: false, message: 'Email is required' });
+      return;
+    }
+    const result = await bookingService.sendManageBookingOTP(email);
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+router.post('/otp/verify', async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) {
+      res.status(400).json({ success: false, message: 'Email and OTP are required' });
+      return;
+    }
+    const result = await bookingService.verifyManageBookingOTP(email, otp);
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+router.post('/modify-unpaid', async (req, res) => {
+  try {
+    const { email, hallId, newEventDates } = req.body;
+    if (!email || !hallId || !newEventDates || !Array.isArray(newEventDates)) {
+      res.status(400).json({ success: false, message: 'Invalid payload' });
+      return;
+    }
+    const result = await bookingService.modifyUnpaidBookings({ email, hallId, newEventDates });
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
 export default router;

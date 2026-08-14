@@ -111,6 +111,62 @@ export class BookingPaymentController {
   }
 
   /**
+   * Public: Get payment details from base reference
+   */
+  async getPaymentDetails(req: Request, res: Response): Promise<void> {
+    try {
+      const { reference } = req.params;
+      
+      if (!reference) {
+        res.status(400).json({ success: false, message: "Reference is required" });
+        return;
+      }
+
+      // reference could be 'BKG-abc123xyz'
+      // We look for payments with paymentReference starting with this
+      const payments = await BookingPaymentModel.find({
+        paymentReference: { $regex: new RegExp(`^${reference}`) }
+      }).populate('hall').populate('bookings');
+
+      if (!payments || payments.length === 0) {
+        res.status(404).json({ success: false, message: "Payment not found" });
+        return;
+      }
+
+      let paymentLinkNGN;
+      let paymentLinkUSD;
+      let priceNGN;
+      let priceUSD;
+
+      for (const p of payments) {
+        if (p.currency === 'NGN') {
+          paymentLinkNGN = p.paymentLink;
+          priceNGN = p.amount;
+        } else if (p.currency === 'USD') {
+          paymentLinkUSD = p.paymentLink;
+          priceUSD = p.amount;
+        }
+      }
+
+      res.status(200).json({
+        success: true,
+        data: {
+          paymentLinkNGN,
+          paymentLinkUSD,
+          priceNGN,
+          priceUSD,
+          bookings: payments[0].bookings,
+          hall: payments[0].hall,
+          userId: payments[0].user
+        }
+      });
+    } catch (error: any) {
+      logger.error("getPaymentDetails error:", error);
+      res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  }
+
+  /**
    * Verify Payment (can be called by webhook or frontend return url)
    */
   async verifyPayment(req: Request, res: Response): Promise<void> {

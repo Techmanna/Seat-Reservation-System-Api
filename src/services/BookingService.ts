@@ -1727,4 +1727,222 @@ export class BookingService {
       logger.error("Error auto-processing waitlist:", err);
     }
   }
+
+  async sendManageBookingOTP(email: string): Promise<ApiResponse<any>> {
+    try {
+      const user = await UserModel.findOne({ email });
+      if (!user) {
+        return { success: false, message: "No account found with this email." };
+      }
+      
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date();
+      expiresAt.setMinutes(expiresAt.getMinutes() + 10);
+
+      await OTPModel.findOneAndUpdate(
+        { email, tempId: 'manage_booking' },
+        { otp, expiresAt, verified: false, attempts: 0 },
+        { upsert: true, new: true }
+      );
+
+      await this.notificationService.sendOTPEmail(email, otp, user.name || "User");
+
+      return { success: true, message: "OTP sent successfully." };
+    } catch (error: any) {
+      logger.error("Error sending OTP:", error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  async verifyManageBookingOTP(email: string, otp: string): Promise<ApiResponse<any>> {
+    try {
+      const otpRecord = await OTPModel.findOne({ email, tempId: 'manage_booking' });
+
+      if (!otpRecord) return { success: false, message: "No OTP found for this email." };
+      if (otpRecord.attempts >= 5) return { success: false, message: "Too many attempts. Request a new OTP." };
+      if (new Date() > otpRecord.expiresAt) return { success: false, message: "OTP has expired." };
+      if (otpRecord.otp !== otp) {
+        otpRecord.attempts += 1;
+        await otpRecord.save();
+        return { success: false, message: "Invalid OTP." };
+      }
+
+      otpRecord.verified = true;
+      await otpRecord.save();
+
+      const user = await UserModel.findOne({ email });
+      if (!user) return { success: false, message: "User not found." };
+
+      const bookings = await BookingModel.find({
+        user: user._id,
+        status: { $nin: ['cancelled', 'voided'] },
+        paymentStatus: { $ne: 'paid' }
+      }).populate('hall event user');
+
+      return { success: true, message: "OTP verified", data: { email, bookings } };
+    } catch (error: any) {
+      logger.error("Error verifying OTP:", error);
+      return { success: false, message: error.message };
+    }
+  }
+
+  async modifyUnpaidBookings(data: { email: string; hallId: string; newEventDates: string[] }): Promise<ApiResponse<any>> {
+    try {
+      const { email, hallId, newEventDates } = data;
+      
+      const user = await UserModel.findOne({ email });
+      if (!user) return { success: false, message: "User not found" };
+
+      const hallResponse = await new HallService().getHallById(hallId);
+      const hall = hallResponse.data;
+      if (!hall) return { success: false, message: "Hall not found" };
+
+      const existingBookings = await BookingModel.find({
+        user: user._id,
+        hall: hallId,
+        paymentStatus: { $ne: 'paid' },
+        status: { $nin: ['cancelled', 'voided'] }
+      }).populate('event');
+
+      const existingEventDatesMap = new Map();
+      existingBookings.forEach(b => {
+        if (b.event && (b.event as any).date) {
+           existingEventDatesMap.set((b.event as any).date.toISOString().split('T')[0], b);
+        }
+      });
+
+      const newDatesSet = new Set(newEventDates.map(d => new Date(d).toISOString().split('T')[0]));
+      
+      let preferredSeatNumbers: number[] = [];
+      let preferredSeatLabels: string[] = [];
+      let requestedSeatsCount = 1;
+
+      if (existingBookings.length > 0) {
+        preferredSeatNumbers = existingBookings[0].seatNumbers || [];
+        preferredSeatLabels = (existingBookings[0].seatLabels || []).map(s => String(s));
+        requestedSeatsCount = preferredSeatNumbers.length > 0 ? preferredSeatNumbers.length : 1;
+      }
+      
+      for (const [dateStr, booking] of existingEventDatesMap.entries()) {
+        if (!newDatesSet.has(dateStr)) {
+          booking.status = BookingStatus.Cancelled;
+          booking.cancelledAt = new Date();
+          await booking.save();
+        }
+      }
+
+      const addedDates: string[] = [];
+      for (const newDateStr of newDatesSet) {
+        if (!existingEventDatesMap.has(newDateStr)) {
+          addedDates.push(newDateStr);
+        }
+      }
+
+      for (const dateStr of addedDates) {
+        let event = await EventModel.findOne({
+          hall: hallId,
+          date: {
+            $gte: new Date(dateStr + "T00:00:00.000Z"),
+            $lte: new Date(dateStr + "T23:59:59.999Z")
+          }
+        });
+
+        if (!event) {
+          event = await EventModel.create({
+            hall: hallId,
+            date: new Date(dateStr),
+            name: `${hall.name} - ${dateStr}`,
+            availableSeats: hall.defaultTotalSeats || 100
+          });
+        }
+
+        const ticketId = 'TKT-' + Math.random().toString(36).substring(2, 10).toUpperCase();
+        const reservationToken = uuidv4();
+        
+        let finalSeatNumbers: number[] = [];
+        let finalSeatLabels: string[] = [];
+
+        if (hall.isMultipleDaysBookingEnabled || preferredSeatNumbers.length > 0) {
+          const bookedSeats = await BookingModel.find({
+            event: event._id?.toString(),
+            status: { $nin: [BookingStatus.Cancelled, BookingStatus.Voided] },
+          }).select("seatNumbers seatLabels");
+          
+          const allBookedSeatNumbers = bookedSeats.flatMap(b => b.seatNumbers);
+          const conflictingNumbers = preferredSeatNumbers.filter(seat => allBookedSeatNumbers.includes(seat));
+          
+          if (conflictingNumbers.length === 0 && preferredSeatNumbers.length > 0) {
+            finalSeatNumbers = [...preferredSeatNumbers];
+            finalSeatLabels = [...preferredSeatLabels];
+          } else {
+            try {
+              const allocated = SeatUtils.findNextAvailableSeats(event.totalSeats, allBookedSeatNumbers, requestedSeatsCount);
+              finalSeatNumbers = allocated.numbers;
+              finalSeatLabels = allocated.labels;
+            } catch (e) {
+              logger.warn(`Could not auto-allocate seats for added date ${dateStr}`);
+            }
+          }
+        }
+        
+        const booking = new BookingModel({
+          user: user._id,
+          event: event._id,
+          hall: hallId,
+          eventDate: new Date(dateStr),
+          ticketId,
+          seatNumbers: finalSeatNumbers,
+          seatLabels: finalSeatLabels,
+          totalAmount: hall.discountConfig?.existingUserPriceNGN ?? hall.paymentPriceNGN ?? 0,
+          status: BookingStatus.Attending,
+          paymentStatus: 'pending',
+          reservationToken,
+          qrCode: ""
+        });
+
+        const qrCode = await this.qrService.generateQRCode(booking);
+        booking.qrCode = qrCode;
+        
+        await booking.save();
+      }
+
+      const finalBookings = await BookingModel.find({
+        user: user._id,
+        hall: hallId,
+        paymentStatus: 'pending',
+        status: { $nin: ['cancelled', 'voided'] }
+      });
+
+      const paymentService = new BookingPaymentService();
+      
+      const linkResult = await paymentService.generatePaymentLink(
+        user._id.toString(),
+        hallId,
+        finalBookings.map(b => b._id.toString()),
+        false,
+        true
+      );
+
+      if (!linkResult.success) {
+        return { success: false, message: "Failed to generate new payment link: " + linkResult.message };
+      }
+
+      let baseRef = "";
+      if (linkResult.paymentLinkNGN) {
+        baseRef = linkResult.paymentLinkNGN.split('/').pop()?.replace('-NGN', '') || "";
+      } else if (linkResult.paymentLinkUSD) {
+        baseRef = linkResult.paymentLinkUSD.split('/').pop()?.replace('-USD', '') || "";
+      }
+
+      return {
+        success: true,
+        message: "Bookings modified successfully.",
+        data: { baseRef }
+      };
+
+    } catch (error: any) {
+      logger.error("modifyUnpaidBookings error:", error);
+      return { success: false, message: error.message };
+    }
+  }
 }

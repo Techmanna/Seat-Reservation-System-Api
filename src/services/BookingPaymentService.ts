@@ -163,15 +163,14 @@ export class BookingPaymentService {
           try {
             const events = await EventModel.find({ _id: { $in: bookings.map(b => b.event) } });
             const eventDates = events.map(e => e.date).filter(d => !!d) as Date[];
-            const proxyLinkNGN = paymentLinkNGN ? `${config.apiUrl}/api/payments/checkout/${referenceNGN}` : undefined;
-            const proxyLinkUSD = paymentLinkUSD ? `${config.apiUrl}/api/payments/checkout/${referenceUSD}` : undefined;
+            const frontendLink = `${config.url}/payment/options?ref=${baseReference}`;
 
             await this.notificationService.sendPaymentLinkEmail(
               user as any,
               priceNGN,
               priceUSD,
-              proxyLinkNGN,
-              proxyLinkUSD,
+              frontendLink, // Passed as paymentLinkNGN
+              frontendLink, // Passed as paymentLinkUSD
               eventDates,
               {
                 hallName: hall.name,
