@@ -7,8 +7,7 @@ export class QRService {
 
   async generateQRCode(booking: Booking): Promise<string> {
     const qrData = `${this.qrUrl}/${booking.ticketId}`;
-    const qrCodeString = await QRCode.toDataURL(qrData);
-    return qrCodeString;
+    return `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qrData)}`;
   }
 
   validateQRCode(qrData: string): boolean {
