@@ -51,7 +51,7 @@ export class HallService {
             // query.reservationOpenDate = { $lte: now };
             query.reservationCloseDate = { $gte: now };
         }
-        const halls = await HallModel.find(query).sort({ createdAt: 1 });
+        const halls = await HallModel.find(query).sort({ reservationOpenDate: 1 });
         
         return {
             success: true,
