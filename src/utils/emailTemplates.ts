@@ -213,7 +213,7 @@ export class EmailTemplateBuilder {
   }
 
   getLogo = () =>
-    "https://app.themorayobrownshow.com/assets/tmas-logo-Cfr-CT8I.png";
+    "https://app.themorayobrownshow.com/tmas-logo.png";
 
   getIcon(type: "success" | "warning" | "error" | "info") {
     return "";
@@ -276,7 +276,7 @@ export class EmailTemplateBuilder {
 
     const content = `
     <div class="header">
-      <img src="https://app.themorayobrownshow.com/assets/tmas-logo-Cfr-CT8I.png" alt="Logo" class="logo">
+      <img src="${this.getLogo()}" alt="Logo" class="logo">
     </div>
 
     <h1 class="title">Hello!</h1>
@@ -369,7 +369,7 @@ export class EmailTemplateBuilder {
 
     const content = `
     <div class="header">
-      <img src="https://app.themorayobrownshow.com/assets/tmas-logo-Cfr-CT8I.png" alt="Logo" class="logo">
+      <img src="${this.getLogo()}" alt="Logo" class="logo">
     </div>
 
     <h1 class="title">Hello!</h1>

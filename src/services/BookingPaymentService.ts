@@ -75,11 +75,13 @@ export class BookingPaymentService {
 
       let paymentLinkNGN: string | undefined;
       let paymentLinkUSD: string | undefined;
+      let referenceNGN: string | undefined;
+      let referenceUSD: string | undefined;
 
       const baseReference = `BKG-${uuidv4().replace(/-/g, '').substring(0, 10)}`;
 
       if (priceNGN > 0) {
-        const referenceNGN = `${baseReference}-NGN`;
+        referenceNGN = `${baseReference}-NGN`;
         const callbackUrl = `${config.url}/payment/verify?reference=${referenceNGN}`;
         const payload = {
           email: user.email,
@@ -110,7 +112,7 @@ export class BookingPaymentService {
       }
 
       if (priceUSD > 0) {
-        const referenceUSD = `${baseReference}-USD`;
+        referenceUSD = `${baseReference}-USD`;
         const callbackUrl = `${config.url}/payment/verify?reference=${referenceUSD}`;
         const payload = {
           tx_ref: referenceUSD,
@@ -161,12 +163,15 @@ export class BookingPaymentService {
           try {
             const events = await EventModel.find({ _id: { $in: bookings.map(b => b.event) } });
             const eventDates = events.map(e => e.date).filter(d => !!d) as Date[];
+            const proxyLinkNGN = paymentLinkNGN ? `${config.apiUrl}/api/payments/checkout/${referenceNGN}` : undefined;
+            const proxyLinkUSD = paymentLinkUSD ? `${config.apiUrl}/api/payments/checkout/${referenceUSD}` : undefined;
+
             await this.notificationService.sendPaymentLinkEmail(
               user as any,
               priceNGN,
               priceUSD,
-              paymentLinkNGN,
-              paymentLinkUSD,
+              proxyLinkNGN,
+              proxyLinkUSD,
               eventDates,
               {
                 hallName: hall.name,
@@ -180,10 +185,13 @@ export class BookingPaymentService {
         })();
       }
 
+      const proxyLinkNGN = paymentLinkNGN ? `${config.apiUrl}/api/payments/checkout/${referenceNGN}` : undefined;
+      const proxyLinkUSD = paymentLinkUSD ? `${config.apiUrl}/api/payments/checkout/${referenceUSD}` : undefined;
+
       return {
         success: true,
-        paymentLinkNGN,
-        paymentLinkUSD,
+        paymentLinkNGN: proxyLinkNGN,
+        paymentLinkUSD: proxyLinkUSD,
         priceNGN,
         priceUSD,
         message: "Payment links generated successfully."
@@ -220,6 +228,31 @@ export class BookingPaymentService {
       }
 
       if (isSuccessful) {
+        // --- SAFEGUARD: Check if the booking has already expired (cancelled by cron) ---
+        const relatedBookings = await BookingModel.find({ _id: { $in: paymentRecord.bookings } });
+        const hasExpiredBookings = relatedBookings.some(b => b.status === BookingStatus.Cancelled || b.status === BookingStatus.Voided);
+
+        if (hasExpiredBookings) {
+          logger.warn(`[BookingPaymentService] Payment received for EXPIRED booking. Ref: ${reference}. Initiating automatic refund.`);
+          
+          if (paymentRecord.provider === 'paystack') {
+             try {
+                await PaymentService.refundPaystackTransaction(reference);
+                logger.info(`[BookingPaymentService] Successfully refunded Paystack transaction ${reference}. Manual review may still be necessary.`);
+             } catch (refundErr: any) {
+                logger.error(`[BookingPaymentService] CRITICAL: Automatic Paystack refund failed for ${reference}. Manual refund required! Error: ${refundErr.message}`);
+             }
+          } else {
+             logger.warn(`[BookingPaymentService] Automatic refund not implemented for Flutterwave yet. Manual refund required for ${reference}.`);
+          }
+
+          // Mark payment as refunded (since the payment was successful, but we can't assign seats)
+          await BookingPaymentModel.findByIdAndUpdate(paymentRecord._id, { $set: { status: 'refunded' } });
+          
+          return { success: false, message: "Payment was successful but reservation had expired. Payment has been automatically refunded. Please contact support if you need assistance." };
+        }
+        // --- END SAFEGUARD ---
+
         // Use atomic update to prevent race conditions (e.g. webhook and frontend hitting this simultaneously)
         const updated = await BookingPaymentModel.findOneAndUpdate(
           { _id: paymentRecord._id, status: 'pending' },
@@ -275,6 +308,42 @@ export class BookingPaymentService {
     } catch (error: any) {
       logger.error("[BookingPaymentService] verifyPayment error:", error);
       return { success: false, message: error.message || "Failed to verify payment." };
+    }
+  }
+
+  /**
+   * Proxy to check if a booking is expired before forwarding to the payment provider.
+   */
+  async checkoutProxy(reference: string): Promise<{ success: boolean; message: string; data?: any }> {
+    try {
+      const paymentRecord = await BookingPaymentModel.findOne({ paymentReference: reference });
+      if (!paymentRecord) {
+        return { success: false, message: "Payment record not found." };
+      }
+
+      if (paymentRecord.status === 'successful') {
+        return { success: false, message: "This payment has already been successfully processed." };
+      }
+      
+      if (paymentRecord.status === 'refunded') {
+        return { success: false, message: "This payment has been refunded." };
+      }
+
+      const bookings = await BookingModel.find({ _id: { $in: paymentRecord.bookings } });
+      const hasExpiredBookings = bookings.some(b => b.status === BookingStatus.Cancelled || b.status === BookingStatus.Voided);
+
+      if (hasExpiredBookings || bookings.length === 0) {
+        return { success: false, message: "Sorry, this reservation has expired and the seats have been released. Please start a new booking." };
+      }
+
+      return {
+        success: true,
+        message: "Valid checkout link.",
+        data: { paymentLink: paymentRecord.paymentLink }
+      };
+    } catch (error: any) {
+      logger.error("[BookingPaymentService] checkoutProxy error:", error);
+      return { success: false, message: "An error occurred while validating the checkout link." };
     }
   }
 }

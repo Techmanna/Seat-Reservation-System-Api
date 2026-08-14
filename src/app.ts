@@ -25,7 +25,7 @@ import notificationRoutes from './routes/notification.routes';
 import swaggerUi from 'swagger-ui-express';
 import swaggerJSDoc from 'swagger-jsdoc';
 import path from 'path';
-import { CronService } from './services/CronService';
+import { CronService } from './services/cron';
 
 dotenv.config();
 

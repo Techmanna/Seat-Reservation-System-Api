@@ -28,7 +28,7 @@ const bookingPaymentSchema = new Schema<BookingPayment>({
   },
   status: {
     type: String,
-    enum: ['pending', 'successful', 'failed'],
+    enum: ['pending', 'successful', 'failed', 'refunded'],
     default: 'pending'
   },
   paymentReference: {

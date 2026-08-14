@@ -131,7 +131,7 @@ export interface BookingPayment extends Document {
     bookings: (mongoose.Schema.Types.ObjectId | Booking)[];
     amount: number;
     currency: string;
-    status: 'pending' | 'successful' | 'failed';
+    status: 'pending' | 'successful' | 'failed' | 'refunded';
     paymentReference?: string;
     paymentLink?: string;
     provider: 'paystack' | 'flutterwave';

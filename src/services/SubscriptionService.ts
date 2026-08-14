@@ -2,7 +2,7 @@ import { SubscriptionModel } from '../models/Subscription';
 import { ISubscription, SubscriptionTier, SubscriptionStatus, PaymentProvider } from '../types/subscription.type';
 import { ZoomService } from './ZoomService';
 import mongoose from 'mongoose';
-import { CronService } from './CronService';
+import { CronService } from './cron';
 import { EventModel } from '../models/Event';
 import { DateTime } from 'luxon';
 import { logger } from '../utils/logger';

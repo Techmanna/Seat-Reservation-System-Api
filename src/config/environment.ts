@@ -50,7 +50,10 @@ export const config = {
     
     // Frontend URL
     url: process.env.FRONTEND_URL!,
-    adminUrl: process.env.ADMIN_URL || 'https://admin.themorayobrownshow.com'
+    adminUrl: process.env.ADMIN_URL || 'https://admin.themorayobrownshow.com',
+
+    // API URL
+    apiUrl: process.env.API_URL || `http://localhost:${process.env.PORT || '3000'}`,
 };
 
 // Validate required environment variables

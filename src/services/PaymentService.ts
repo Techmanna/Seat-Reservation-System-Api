@@ -139,4 +139,34 @@ export class PaymentService {
             throw error;
         }
     }
+
+    /**
+     * Paystack Refund
+     */
+    public static async refundPaystackTransaction(transactionIdOrReference: string, amount?: number): Promise<any> {
+        try {
+            const payload: any = { transaction: transactionIdOrReference };
+            if (amount) {
+                payload.amount = amount; // Amount in kobo
+            }
+
+            const response = await fetch(`https://api.paystack.co/refund`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.paystackSecret}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json() as any;
+            if (!response.ok || !data.status) {
+                throw new Error(data.message || 'Paystack refund failed');
+            }
+            return data.data; 
+        } catch (error: any) {
+            logger.error("[PaymentService] Paystack Refund error:", error.message);
+            throw error;
+        }
+    }
 }
