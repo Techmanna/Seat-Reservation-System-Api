@@ -1735,13 +1735,22 @@ export class BookingService {
         return { success: false, message: "No account found with this email." };
       }
       
+      const existingOTP = await OTPModel.findOne({ email, tempId: 'manage_booking' });
+      if (existingOTP && existingOTP.createdAt) {
+         const diff = Date.now() - existingOTP.createdAt.getTime();
+         if (diff < 120 * 1000) {
+            const remaining = Math.ceil((120 * 1000 - diff) / 1000);
+            return { success: false, message: `Please wait ${remaining} seconds before requesting a new OTP.` };
+         }
+      }
+
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date();
       expiresAt.setMinutes(expiresAt.getMinutes() + 10);
 
       await OTPModel.findOneAndUpdate(
         { email, tempId: 'manage_booking' },
-        { otp, expiresAt, verified: false, attempts: 0 },
+        { otp, expiresAt, verified: false, attempts: 0, createdAt: new Date() },
         { upsert: true, new: true }
       );
 
