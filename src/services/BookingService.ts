@@ -630,6 +630,7 @@ export class BookingService {
           }
 
           await booking.save();
+          await booking.populate('hall');
           createdBookings.push(booking);
 
           if (!bookingData.isWaitlist) {

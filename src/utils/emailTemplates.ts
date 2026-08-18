@@ -1,6 +1,6 @@
 // emailTemplates.js - Reusable Email Template System
 
-import { Booking, User, Event } from "../types";
+import { Booking, User, Event, Hall } from "../types";
 import { formatDate } from "./formatDate";
 import config from "../config/environment";
 
@@ -253,8 +253,9 @@ export class EmailTemplateBuilder {
     if (!bookings || bookings.length === 0) return "";
     const firstBooking = bookings[0];
     const { ticketId, qrCode, user } = firstBooking;
-    const h = firstBooking.hall as any;
+    const h = firstBooking.hall as Hall;
     const u = user as any;
+    console.log(bookings);
 
     let datesListHtml = '';
     bookings.forEach(b => {
@@ -306,11 +307,11 @@ export class EmailTemplateBuilder {
 
     <div class="details-section">
       <h2 class="details-title">📍 Venue</h2>
-      <p class="detail-value">
-        ${h?.name || "MAB Studios"},<br/>
-        ${h?.address || "3, Worship Center, Off Etal Avenue, Kudirat Abiola Way"},<br/>
-        ${h?.city || "Oregun"}, ${h?.state || "Lagos"}.
-      </p>
+     ${h?.name && h?.address && h?.city && h?.state ? `<p class="detail-value">
+        ${h?.name},<br/>
+        ${h?.address},<br/>
+        ${h?.city}, ${h?.state}.
+      </p>` : "-"}
     </div>
 
     <div class="info-section">
@@ -330,8 +331,7 @@ export class EmailTemplateBuilder {
       </ul>
     </div>
 
-    ${
-      qrCode
+    ${qrCode
         ? `
       <div class="qr-section">
         <img src="${qrCode}" alt="QR Code" class="qr-code">
@@ -341,7 +341,7 @@ export class EmailTemplateBuilder {
       </div>
     `
         : ""
-    }
+      }
 
     <div class="details-section">
       <p class="detail-value">
@@ -361,11 +361,10 @@ export class EmailTemplateBuilder {
 
   // Booking Confirmation Template
   generateBookingConfirmation(data: Booking) {
-    const { eventDate, seatLabels, ticketId, qrCode, event, user } = data;
+    const { eventDate, seatLabels, ticketId, qrCode, user } = data;
 
     const u = user as User;
-    const e = event as Event;
-    const h = data.hall as any;
+    const h = data.hall as Hall;
 
     const content = `
     <div class="header">
@@ -397,9 +396,8 @@ export class EmailTemplateBuilder {
       <div class="detail-row">
         <span class="detail-label">Seat(s)</span>
         <span class="detail-value">
-          ${" "}${
-      Array.isArray(seatLabels) ? seatLabels.join(", ") : seatLabels
-    }
+          ${" "}${Array.isArray(seatLabels) ? seatLabels.join(", ") : seatLabels
+      }
         </span>
       </div>
 
@@ -413,11 +411,11 @@ export class EmailTemplateBuilder {
 
     <div class="details-section">
       <h2 class="details-title">📍 Venue</h2>
-      <p class="detail-value">
-        ${h?.name || "MAB Studios"},<br/>
-        ${h?.address || "3, Worship Center, Off Etal Avenue, Kudirat Abiola Way"},<br/>
-        ${h?.city || "Oregun"}, ${h?.state || "Lagos"}.
-      </p>
+      ${h?.name && h?.address && h?.city && h?.state ? `<p class="detail-value">
+        ${h?.name},<br/>
+        ${h?.address},<br/>
+        ${h?.city}, ${h?.state}.
+      </p>` : "-"}
     </div>
 
     <div class="info-section">
@@ -437,8 +435,7 @@ export class EmailTemplateBuilder {
       </ul>
     </div>
 
-    ${
-      qrCode
+    ${qrCode
         ? `
       <div class="qr-section">
         <img src="${qrCode}" alt="QR Code" class="qr-code">
@@ -448,7 +445,7 @@ export class EmailTemplateBuilder {
       </div>
     `
         : ""
-    }
+      }
 
     <div class="details-section">
       <p class="detail-value">
@@ -502,8 +499,8 @@ export class EmailTemplateBuilder {
           <div class="detail-row">
             <span class="detail-label">Date</span>
             <span class="detail-value">${formatDate(
-              eventDate
-            )}</span>
+      eventDate
+    )}</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">Arrival</span>
@@ -515,9 +512,8 @@ export class EmailTemplateBuilder {
           </div>
           <div class="detail-row">
             <span class="detail-label">Seat(s)</span>
-            <span class="detail-value">${
-              Array.isArray(seatLabels) ? seatLabels.join(", ") : seatLabels
-            }</span>
+            <span class="detail-value">${Array.isArray(seatLabels) ? seatLabels.join(", ") : seatLabels
+      }</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">Booking ID</span>
@@ -573,10 +569,9 @@ export class EmailTemplateBuilder {
       <h1 class="title">Verification Code</h1>
       <p class="subtitle">Please use the following code to ${purpose}</p>
 
-      ${
-        userName
-          ? `<p style="text-align: center; margin: 20px 0; color: #374151;">Hello ${userName},</p>`
-          : ""
+      ${userName
+        ? `<p style="text-align: center; margin: 20px 0; color: #374151;">Hello ${userName},</p>`
+        : ""
       }
 
       <div class="otp-section" style="text-align: center; margin: 40px 0; padding: 30px; background: #f8fafc; border: 2px dashed #cbd5e1; border-radius: 12px;">
@@ -738,8 +733,7 @@ export class EmailTemplateBuilder {
       </div>
     </div>
 
-    ${
-      qrCode
+    ${qrCode
         ? `
       <div class="qr-section">
         <img src="${qrCode}" alt="QR Code" class="qr-code">
@@ -749,7 +743,7 @@ export class EmailTemplateBuilder {
       </div>
     `
         : ""
-    }
+      }
 
     <div class="footer">
       <p>We look forward to seeing you!<br/><strong>The Morayo Show Team</strong></p>
@@ -763,9 +757,9 @@ export class EmailTemplateBuilder {
   // Payment Link Email Template
   generatePaymentLinkEmail(user: { name: string; email: string }, priceNGN: number, priceUSD: number, paymentLinkNGN: string | undefined, paymentLinkUSD: string | undefined, eventDates: Date[], extraDetails?: { hallName?: string, originalPriceNGN?: number, numBookings?: number }) {
     const datesStr = eventDates.map(d => formatDate(d)).join(", ");
-    
+
     let paymentDetailsHtml = '';
-    
+
     if (extraDetails?.hallName) {
       paymentDetailsHtml += `
       <div class="detail-row" style="margin-top: 15px;">
@@ -988,7 +982,7 @@ export class EmailTemplateBuilder {
   // Payment Expiration Email Template
   generatePaymentExpirationEmail(user: { name: string; email: string }, eventDates: Date[]) {
     const datesStr = eventDates.map(d => formatDate(d)).join(", ");
-    
+
     const content = `
     <div class="header">
       <img src="${this.getLogo()}" alt="Logo" class="logo">
@@ -1014,7 +1008,7 @@ export class EmailTemplateBuilder {
       <p>&copy; ${new Date().getFullYear()} The Morayo Show. All rights reserved.</p>
     </div>
     `;
-    
+
     return this.generateBaseTemplate(content);
   }
 }
