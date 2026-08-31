@@ -870,6 +870,7 @@ router.get("/registrations", async (req, res) => {
       limit = 50,
       sortBy = "createdAt",
       sortOrder = "desc",
+      expandSeats,
     } = req.query;
 
     // Build match query
@@ -958,6 +959,23 @@ router.get("/registrations", async (req, res) => {
       pipeline.push({ $match: userMatchConditions });
     }
 
+    if (expandSeats === "true") {
+      pipeline.push({
+        $unwind: {
+          path: "$seatNumbers",
+          includeArrayIndex: "seatIndex",
+          preserveNullAndEmptyArrays: true
+        }
+      });
+      pipeline.push({
+        $addFields: {
+          singleSeatLabel: {
+            $arrayElemAt: ["$seatLabels", "$seatIndex"]
+          }
+        }
+      });
+    }
+
     // Add projection to format the response
     pipeline.push({
       $project: {
@@ -992,14 +1010,24 @@ router.get("/registrations", async (req, res) => {
             else: "N/A"
           }
         },
-        seat_number: {
-          $cond: {
-            if: { $gt: [{ $size: "$seatNumbers" }, 0] },
-            then: { $arrayElemAt: ["$seatNumbers", 0] },
-            else: null,
-          },
-        },
-        seat_labels: "$seatLabels",
+        seat_number: expandSeats === "true" 
+          ? "$seatNumbers"
+          : {
+              $cond: {
+                if: { $gt: [{ $size: { $ifNull: ["$seatNumbers", []] } }, 0] },
+                then: { $arrayElemAt: ["$seatNumbers", 0] },
+                else: null,
+              },
+            },
+        seat_labels: expandSeats === "true"
+          ? {
+              $cond: {
+                if: { $ne: ["$singleSeatLabel", null] },
+                then: ["$singleSeatLabel"],
+                else: []
+              }
+            }
+          : "$seatLabels",
         event_date: "$eventDate",
         status: "$status",
         created_date: "$createdAt",
