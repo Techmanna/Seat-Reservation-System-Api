@@ -9,6 +9,8 @@ import { startOfDay, endOfDay } from 'date-fns';
 import { NotificationType } from '../models/Notification';
 import { NotificationPreferenceModel } from '../models/NotificationPreference';
 import { InAppNotificationService } from './InAppNotificationService';
+import { NotificationJobModel } from '../models/NotificationJob';
+import fs from 'fs';
 
 const inAppService = new InAppNotificationService();
 
@@ -18,17 +20,17 @@ export class NotificationService {
    * Unified notification method that respects user preferences
    */
   async notify(
-    userId: string, 
-    type: NotificationType, 
-    title: string, 
-    message: string, 
+    userId: string,
+    type: NotificationType,
+    title: string,
+    message: string,
     data: any = {}
   ): Promise<void> {
     try {
       const prefs = await inAppService.getPreferences(userId);
       let categoryPrefs;
 
-      switch(type) {
+      switch (type) {
         case NotificationType.REMINDER:
           categoryPrefs = prefs.reminders;
           break;
@@ -403,30 +405,22 @@ export class NotificationService {
    */
   private createEmailTemplate(message: string, recipientName: string): string {
     return `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
-          <h1 style="color: white; margin: 0; font-size: 28px;">Event Hall Notification</h1>
-        </div>
-        
-        <div style="background: white; padding: 30px; border: 1px solid #e0e0e0; border-top: none;">
-          <p style="font-size: 16px; color: #333; margin-bottom: 20px;">Dear ${recipientName},</p>
-          
-          <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #667eea; margin: 20px 0;">
-            <p style="font-size: 16px; line-height: 1.6; color: #333; margin: 0;">${message}</p>
+     <div style="font-family: Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background: #f5f5f5; color: #333;">
+      <div style="background: #ffffff; border: 1px solid #e0e0e0;">
+        <div style="padding: 28px;">
+          <div style="background: #f7f7f7; border: 1px solid #e5e5e5; padding: 18px; margin: 20px 0;">
+            <p style="font-size: 15px; line-height: 1.7; color: #444; margin: 0;">
+              ${message}
+            </p>
           </div>
-          
-          <p style="font-size: 14px; color: #666; margin-top: 30px;">
-            Best regards,<br>
-            <strong>Event Hall Team</strong>
-          </p>
         </div>
-        
-        <div style="background: #f8f9fa; padding: 20px; text-align: center; border-radius: 0 0 10px 10px; border: 1px solid #e0e0e0; border-top: none;">
-          <p style="font-size: 12px; color: #999; margin: 0;">
-            This is an automated message. Please do not reply to this email.
+        <div style="padding: 18px 28px; background: #fafafa; border-top: 1px solid #e5e5e5;">
+          <p style="font-size: 12px; line-height: 1.5; color: #999; margin: 0;">
+            This is an automated message.
           </p>
         </div>
       </div>
+    </div>
     `;
   }
 
@@ -447,7 +441,7 @@ export class NotificationService {
     // Process recipients in batches
     for (let i = 0; i < recipients.length; i += batchSize) {
       const batch = recipients.slice(i, i + batchSize);
-      
+
       try {
         if (type === 'email' || type === 'both') {
           const emailPromises = batch
@@ -468,11 +462,11 @@ export class NotificationService {
             });
 
           const emailResults = await Promise.allSettled(emailPromises);
-          const emailSent = emailResults.filter(result => 
+          const emailSent = emailResults.filter(result =>
             result.status === 'fulfilled' && result.value.success
           ).length;
           const emailFailed = emailResults.length - emailSent;
-          
+
           totalSent += emailSent;
           totalFailed += emailFailed;
         }
@@ -491,11 +485,11 @@ export class NotificationService {
             });
 
           const smsResults = await Promise.allSettled(smsPromises);
-          const smsSent = smsResults.filter(result => 
+          const smsSent = smsResults.filter(result =>
             result.status === 'fulfilled' && result.value.success
           ).length;
           const smsFailed = smsResults.length - smsSent;
-          
+
           totalSent += smsSent;
           totalFailed += smsFailed;
         }
@@ -516,28 +510,182 @@ export class NotificationService {
   }
 
   /**
-   * Process notification job in background
+   * Create a bulk email job and queue it for background processing
    */
-  async processNotificationJob(jobData: NotificationJob): Promise<void> {
+  async createBulkEmailJob(
+    targetType: string,
+    subject: string,
+    message: string,
+    attachments?: { filename: string; path: string }[],
+    filters?: any
+  ): Promise<any> {
     try {
-      logger.info(`Starting notification job for ${jobData.totalRecipients} recipients`);
-      
-      const result = await this.sendBatchNotifications(
-        jobData.recipients,
-        jobData.type,
-        jobData.message,
-        jobData.subject
-      );
+      let recipients: { email: string; name: string }[] = [];
+      const { UserModel } = require('../models/User');
 
-      logger.info(`Notification job completed: ${result.sent} sent, ${result.failed} failed`);
-      
-      if (result.errors.length > 0) {
-        logger.warn('Notification errors:', result.errors);
+      if (targetType === 'all') {
+        const users = await UserModel.find({ email: { $exists: true, $ne: null } });
+        recipients = users.map((u: any) => ({ email: u.email, name: u.name || 'User' }));
+      } else if (targetType === 'specific_users' && filters?.userIds) {
+        const users = await UserModel.find({ _id: { $in: filters.userIds } });
+        recipients = users.map((u: any) => ({ email: u.email, name: u.name || 'User' }));
+      } else if (targetType === 'booked_date_range' && filters?.startDate && filters?.endDate) {
+        const start = startOfDay(new Date(filters.startDate));
+        const end = endOfDay(new Date(filters.endDate));
+        const bookings = await BookingModel.find({ eventDate: { $gte: start, $lte: end } }).populate('user');
+        const uniqueEmails = new Map();
+        bookings.forEach((b: any) => {
+          if (b.user && b.user.email) {
+            uniqueEmails.set(b.user.email, b.user.name || 'User');
+          }
+        });
+        recipients = Array.from(uniqueEmails, ([email, name]) => ({ email, name }));
+      } else if (targetType === 'booked_hall' && filters?.hallId) {
+        const bookings = await BookingModel.find({ hall: filters.hallId }).populate('user');
+        const uniqueEmails = new Map();
+        bookings.forEach((b: any) => {
+          if (b.user && b.user.email) {
+            uniqueEmails.set(b.user.email, b.user.name || 'User');
+          }
+        });
+        recipients = Array.from(uniqueEmails, ([email, name]) => ({ email, name }));
+      } else if (targetType === 'not_booked') {
+        const usersWithBookings = await BookingModel.distinct('user');
+        const nonBookedUsers = await UserModel.find({
+          _id: { $nin: usersWithBookings },
+          email: { $exists: true, $ne: null }
+        });
+        recipients = nonBookedUsers.map((u: any) => ({ email: u.email, name: u.name || 'User' }));
+      } else if (targetType === 'individual_email' && filters?.emails) {
+        recipients = filters.emails.map((e: string) => ({ email: e.trim(), name: 'User' }));
       }
 
-    } catch (error: any) {
-      logger.error('Notification job failed:', error);
+      if (recipients.length === 0) {
+        throw new Error("No valid recipients found for the specified target.");
+      }
+
+      const job = await NotificationJobModel.create({
+        status: 'pending',
+        targetType,
+        subject,
+        message,
+        attachments: attachments || [],
+        pendingRecipients: recipients,
+      });
+
+      return job;
+    } catch (error) {
+      logger.error('Failed to create bulk email job:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Process a batch of emails from the oldest pending/processing job
+   */
+  async processBulkEmailBatch(): Promise<void> {
+    try {
+      // Find the oldest job that is pending or processing
+      const job = await NotificationJobModel.findOne({
+        status: { $in: ['pending', 'processing'] }
+      }).sort({ createdAt: 1 });
+
+      if (!job) {
+        return; // No active jobs
+      }
+
+      // Mark as processing if it was pending
+      if (job.status === 'pending') {
+        job.status = 'processing';
+        job.startedAt = new Date();
+        await job.save();
+      }
+
+      // Batch size for Namecheap private email (e.g., limit to 8 per minute)
+      const BATCH_SIZE = 8;
+
+      const recipientsToProcess = job.pendingRecipients.slice(0, BATCH_SIZE);
+      if (recipientsToProcess.length === 0) {
+        job.status = 'completed';
+        job.completedAt = new Date();
+
+        // Delete attachments after job completion for history/auditing logic
+        if (job.attachments && job.attachments.length > 0) {
+          job.attachments.forEach(att => {
+            if (fs.existsSync(att.path)) {
+              fs.unlinkSync(att.path);
+            }
+          });
+        }
+
+        await job.save();
+        logger.info(`Bulk email job ${job._id} completed.`);
+        return;
+      }
+
+      // Send emails
+      const promises = recipientsToProcess.map(async (recipient) => {
+        try {
+          const html = this.createEmailTemplate(job.message, recipient.name);
+          await sendEmail({
+            to: recipient.email,
+            subject: job.subject,
+            html,
+            attachments: job.attachments?.map(a => ({ filename: a.filename, path: a.path }))
+          });
+          return { success: true, email: recipient.email };
+        } catch (error: any) {
+          return { success: false, email: recipient.email, error: error.message };
+        }
+      });
+
+      const results = await Promise.allSettled(promises);
+
+      let sentInBatch = 0;
+      let failedInBatch = 0;
+      const newErrors: string[] = [];
+
+      results.forEach((res) => {
+        if (res.status === 'fulfilled') {
+          if (res.value.success) {
+            sentInBatch++;
+          } else {
+            failedInBatch++;
+            newErrors.push(`Failed sending to ${res.value.email}: ${res.value.error}`);
+          }
+        } else {
+          failedInBatch++;
+          newErrors.push(`Promise rejected: ${res.reason}`);
+        }
+      });
+
+      // Update the job: remove processed recipients and update stats
+      job.pendingRecipients = job.pendingRecipients.slice(BATCH_SIZE) as any;
+      job.sentCount += sentInBatch;
+      job.failedCount += failedInBatch;
+      if (newErrors.length > 0) {
+        job.errorLogs = [...job.errorLogs, ...newErrors];
+      }
+
+      // If no more pending recipients, complete it immediately
+      if (job.pendingRecipients.length === 0) {
+        job.status = 'completed';
+        job.completedAt = new Date();
+        // Delete attachments after job completion
+        if (job.attachments && job.attachments.length > 0) {
+          job.attachments.forEach(att => {
+            if (fs.existsSync(att.path)) {
+              fs.unlinkSync(att.path);
+            }
+          });
+        }
+        logger.info(`Bulk email job ${job._id} completed.`);
+      }
+
+      await job.save();
+
+    } catch (error) {
+      logger.error('Error in processBulkEmailBatch:', error);
     }
   }
 }

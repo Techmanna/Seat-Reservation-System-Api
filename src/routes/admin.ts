@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { upload } from "../middleware/upload";
 import mongoose from "mongoose";
 import { UserModel } from "../models/User";
 import { EventModel } from "../models/Event";
@@ -2233,6 +2234,75 @@ router.post("/retroactive-billing/:hallId", async (req, res) => {
   }
 });
 
-export default router;
+/**
+ * @swagger
+ * /admin/bulk-email:
+ *   post:
+ *     summary: Send bulk emails in background batches
+ *     tags: [Admin]
+ */
+router.post('/bulk-email', upload.array('attachments'), async (req, res) => {
+  try {
+    const { targetType, subject, message, filters } = req.body;
+    let parsedFilters = {};
+    if (filters) {
+      try {
+        parsedFilters = typeof filters === 'string' ? JSON.parse(filters) : filters;
+      } catch (e) {
+        // ignore
+      }
+    }
 
+    const files = req.files as Express.Multer.File[];
+    const attachments = files?.map(f => ({
+      filename: f.originalname,
+      path: f.path,
+    }));
+
+    const job = await notificationService.createBulkEmailJob(
+      targetType,
+      subject,
+      message,
+      attachments,
+      parsedFilters
+    );
+
+    res.status(200).json({ success: true, message: 'Bulk email job created', data: job });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+router.get('/bulk-email/logs', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const skip = (page - 1) * limit;
+
+    const { NotificationJobModel } = await import('../models/NotificationJob');
+    
+    const total = await NotificationJobModel.countDocuments();
+    const logs = await NotificationJobModel.find()
+      .select('-pendingRecipients') // don't send heavy arrays
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    res.json({
+      success: true,
+      data: {
+        logs,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit)
+        }
+      }
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+export default router;
 

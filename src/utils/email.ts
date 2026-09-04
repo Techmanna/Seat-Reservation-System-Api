@@ -26,11 +26,13 @@ export const sendEmail = async ({
   subject,
   html,
   text,
+  attachments,
 }: {
   to: string;
   subject: string;
   html?: string;
   text?: string;
+  attachments?: { filename: string, path: string }[];
 }) => {
   try {
     await transporter.sendMail({
@@ -39,6 +41,7 @@ export const sendEmail = async ({
       subject,
       html,
       text,
+      attachments,
     });
     logger.info(`Email sent to ${to}, ${subject}`);
   } catch (err) {

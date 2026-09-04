@@ -26,5 +26,11 @@ export class CronService {
         setInterval(() => {
             processWaitlists();
         }, 60 * 60 * 1000);
+
+        // Run bulk email processor every minute
+        const notificationService = new (require('../NotificationService').NotificationService)();
+        setInterval(() => {
+            notificationService.processBulkEmailBatch();
+        }, 60 * 1000);
     }
 }
