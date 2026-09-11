@@ -226,6 +226,12 @@ export class SubscriptionController {
     }
 
     public static async initializePaystack(req: Request, res: Response): Promise<void> {
+        const isPaused = true;
+        if (isPaused) {
+            res.status(403).json({ success: false, message: "Subscriptions are currently paused." });
+            return;
+        }
+
         try {
             const { email, userId, plan, timezone } = req.body;
             if (!email || !userId || !plan) {
@@ -297,6 +303,12 @@ export class SubscriptionController {
     }
 
     public static async initializeStripe(req: Request, res: Response): Promise<void> {
+        const isPaused = true;
+        if (isPaused) {
+            res.status(403).json({ success: false, message: "Subscriptions are currently paused." });
+            return;
+        }
+
         try {
             const { email, userId, plan, timezone } = req.body;
             if (!email || !userId || !plan) {
@@ -358,9 +370,9 @@ export class SubscriptionController {
     }
 
     public static async initializeFlutterwave(req: Request, res: Response): Promise<void> {
-        res.status(400).json({
+        res.status(403).json({
             success: false,
-            message: "Flutterwave is not initialized",
+            message: "Subscriptions are currently paused.",
         });
         return;
         // try {
